@@ -3,6 +3,14 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 
+// Route Imports
+import authRoutes from './src/routes/authRoutes.js';
+import profileRoutes from './src/routes/profileRoutes.js';
+import teamRoutes from './src/routes/teamRoutes.js';
+import tournamentRoutes from './src/routes/tournamentRoutes.js';
+import matchRoutes from './src/routes/matchRoutes.js';
+import statsRoutes from './src/routes/statsRoutes.js';
+
 dotenv.config();
 
 const app = express();
@@ -18,6 +26,14 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+
+// Setup API Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/profile', profileRoutes);
+app.use('/api/teams', teamRoutes);
+app.use('/api/tournaments', tournamentRoutes);
+app.use('/api/matches', matchRoutes);
+app.use('/api/stats', statsRoutes);
 
 // Health Check API Endpoint
 app.get('/api/health', (req, res) => {
