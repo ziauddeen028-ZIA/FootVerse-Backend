@@ -7,21 +7,21 @@ export const scheduleMatch = async (req, res) => {
     const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue } = req.body;
 
     // Verify the user is the organizer of this tournament (or an admin)
-    const tournament = await prisma.tournament.findUnique({ where: { id: tournamentId } });
+    const tournament = await prisma.tournaments.findUnique({ where: { id: tournamentId } });
     if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
 
-    const user = await prisma.profile.findUnique({ where: { id: userId } });
-    if (tournament.organizerId !== userId && user.role !== 'admin') {
+    const user = await prisma.profiles.findUnique({ where: { id: userId } });
+    if (tournament.organizer_id !== userId && user.role !== 'admin') {
       return res.status(403).json({ error: 'Only the organizer can schedule matches.' });
     }
 
-    const newMatch = await prisma.match.create({
+    const newMatch = await prisma.matches.create({
       data: {
-        tournamentId,
-        homeTeamId,
-        awayTeamId,
-        matchDate: new Date(matchDate),
-        roundName,
+        tournament_id: tournamentId,
+        home_team_id: homeTeamId,
+        away_team_id: awayTeamId,
+        match_date: new Date(matchDate),
+        round_name: roundName,
         venue,
         status: 'scheduled'
       }
@@ -38,16 +38,31 @@ export const scheduleMatch = async (req, res) => {
 export const getTournamentMatches = async (req, res) => {
   try {
     const { tournamentId } = req.params;
-    
-    const matches = await prisma.match.findMany({
-      where: { tournamentId },
-      include: {
-        homeTeam: { select: { name: true, shortName: true, logoUrl: true } },
-        awayTeam: { select: { name: true, shortName: true, logoUrl: true } }
-      },
-      orderBy: { matchDate: 'asc' }
-    });
 
+    const matches = await prisma.matches.findMany({
+      where: {
+        tournament_id: tournamentId
+      },
+      include: {
+        teams_matches_home_team_idToteams: {
+          select: {
+            name: true,
+            short_name: true,
+            logo_url: true
+          }
+        },
+        teams_matches_away_team_idToteams: {
+          select: {
+            name: true,
+            short_name: true,
+            logo_url: true
+          }
+        }
+      },
+      orderBy: {
+        match_date: "asc"
+      }
+    });
     res.status(200).json({ matches });
   } catch (err) {
     console.error('Error fetching matches:', err);
@@ -63,25 +78,27 @@ export const updateMatchStatus = async (req, res) => {
     const { homeScore, awayScore, status, mvpPlayerId } = req.body;
 
     // Find the match and its parent tournament
-    const match = await prisma.match.findUnique({ 
+    const match = await prisma.matches.findUnique({
       where: { id },
-      include: { tournament: true } 
+      include: {
+        tournaments: true
+      }
     });
     if (!match) return res.status(404).json({ error: 'Match not found.' });
 
     // Verify permissions
-    const user = await prisma.profile.findUnique({ where: { id: userId } });
-    if (match.tournament.organizerId !== userId && user.role !== 'admin') {
+    const user = await prisma.profiles.findUnique({ where: { id: userId } });
+    if (match.tournaments.organizer_id !== userId && user.role !== 'admin') {
       return res.status(403).json({ error: 'Only the organizer can update match scores.' });
     }
 
-    const updatedMatch = await prisma.match.update({
+    const updatedMatch = await prisma.matches.update({
       where: { id },
       data: {
-        homeScore: homeScore !== undefined ? homeScore : match.homeScore,
-        awayScore: awayScore !== undefined ? awayScore : match.awayScore,
+        home_score: homeScore !== undefined ? homeScore : match.home_score,
+        away_score: awayScore !== undefined ? awayScore : match.away_score,
         status: status || match.status,
-        mvpPlayerId: mvpPlayerId || match.mvpPlayerId
+        mvp_player_id: mvpPlayerId || match.mvp_player_id
       }
     });
 

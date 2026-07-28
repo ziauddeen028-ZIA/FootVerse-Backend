@@ -4,9 +4,9 @@ import prisma from '../lib/prisma.js';
 export const createTournament = async (req, res) => {
   try {
     const organizerId = req.user.id;
-    
+
     // Quick security check: Is this user actually an organizer or admin?
-    const user = await prisma.profile.findUnique({ where: { id: organizerId } });
+    const user = await prisma.profiles.findUnique({ where: { id: organizerId } });
     if (!user || (user.role !== 'organizer' && user.role !== 'admin')) {
       return res.status(403).json({ error: 'Only organizers or admins can create tournaments.' });
     }
@@ -17,18 +17,18 @@ export const createTournament = async (req, res) => {
       return res.status(400).json({ error: 'Name, slug, and location are required.' });
     }
 
-    const newTournament = await prisma.tournament.create({
+    const newTournament = await prisma.tournaments.create({
       data: {
         name,
         slug,
         description,
         format,
         location,
-        startDate: startDate ? new Date(startDate) : null,
-        endDate: endDate ? new Date(endDate) : null,
-        maxTeams,
-        entryFee,
-        organizerId
+        start_date: startDate ? new Date(startDate) : null,
+        end_date: endDate ? new Date(endDate) : null,
+        max_teams: maxTeams,
+        entry_fee: entryFee,
+        organizer_id: organizerId
       }
     });
 
@@ -42,8 +42,8 @@ export const createTournament = async (req, res) => {
 // READ all tournaments (Public)
 export const getAllTournaments = async (req, res) => {
   try {
-    const tournaments = await prisma.tournament.findMany({
-      orderBy: { createdAt: 'desc' }
+    const tournaments = await prisma.tournaments.findMany({
+      orderBy: { created_at: 'desc' }
     });
     res.status(200).json({ tournaments });
   } catch (err) {
@@ -56,10 +56,17 @@ export const getAllTournaments = async (req, res) => {
 export const getTournamentBySlug = async (req, res) => {
   try {
     const { slug } = req.params;
-    
-    const tournament = await prisma.tournament.findUnique({
+
+    const tournament = await prisma.tournaments.findUnique({
       where: { slug },
-      include: { organizer: { select: { fullName: true, email: true } } }
+      include: {
+        profiles: {
+          select: {
+            full_name: true,
+            email: true
+          }
+        }
+      }
     });
 
     if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
@@ -78,18 +85,32 @@ export const updateTournament = async (req, res) => {
     const userId = req.user.id;
     const updateData = req.body;
 
-    const tournament = await prisma.tournament.findUnique({ where: { id } });
+    const tournament = await prisma.tournaments.findUnique({ where: { id } });
     if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
-    
+
     // Only the organizer (or an admin) can update
-    const user = await prisma.profile.findUnique({ where: { id: userId } });
-    if (tournament.organizerId !== userId && user.role !== 'admin') {
+    const user = await prisma.profiles.findUnique({ where: { id: userId } });
+    if (tournament.organizer_id !== userId && user.role !== 'admin') {
       return res.status(403).json({ error: 'Only the organizer can update this tournament.' });
     }
 
-    const updatedTournament = await prisma.tournament.update({
+    const updatedTournament = await prisma.tournaments.update({
       where: { id },
-      data: updateData
+      data: {
+        name: updateData.name,
+        slug: updateData.slug,
+        description: updateData.description,
+        format: updateData.format,
+        location: updateData.location,
+        start_date: updateData.startDate
+          ? new Date(updateData.startDate)
+          : undefined,
+        end_date: updateData.endDate
+          ? new Date(updateData.endDate)
+          : undefined,
+        max_teams: updateData.maxTeams,
+        entry_fee: updateData.entryFee
+      }
     });
 
     res.status(200).json({ message: 'Tournament updated!', tournament: updatedTournament });
@@ -105,15 +126,15 @@ export const deleteTournament = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    const tournament = await prisma.tournament.findUnique({ where: { id } });
+    const tournament = await prisma.tournaments.findUnique({ where: { id } });
     if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
-    
-    const user = await prisma.profile.findUnique({ where: { id: userId } });
-    if (tournament.organizerId !== userId && user.role !== 'admin') {
+
+    const user = await prisma.profiles.findUnique({ where: { id: userId } });
+    if (tournament.organizer_id !== userId && user.role !== 'admin') {
       return res.status(403).json({ error: 'Only the organizer can delete this tournament.' });
     }
 
-    await prisma.tournament.delete({ where: { id } });
+    await prisma.tournaments.delete({ where: { id } });
 
     res.status(200).json({ message: 'Tournament deleted successfully.' });
   } catch (err) {
