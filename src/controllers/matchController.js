@@ -7,21 +7,21 @@ export const scheduleMatch = async (req, res) => {
     const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue } = req.body;
 
     // Verify the user is the organizer of this tournament (or an admin)
-    const tournament = await prisma.tournaments.findUnique({ where: { id: tournamentId } });
+    const tournament = await prisma.tournament.findUnique({ where: { id: tournamentId } });
     if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
 
-    const user = await prisma.profiles.findUnique({ where: { id: userId } });
-    if (tournament.organizer_id !== userId && user.role !== 'admin') {
+    const user = await prisma.profile.findUnique({ where: { id: userId } });
+    if (tournament.organizerId !== userId && user.role !== 'admin') {
       return res.status(403).json({ error: 'Only the organizer can schedule matches.' });
     }
 
-    const newMatch = await prisma.matches.create({
+    const newMatch = await prisma.match.create({
       data: {
-        tournament_id: tournamentId,
-        home_team_id: homeTeamId,
-        away_team_id: awayTeamId,
-        match_date: new Date(matchDate),
-        round_name: roundName,
+        tournamentId: tournamentId,
+        homeTeamId: homeTeamId,
+        awayTeamId: awayTeamId,
+        matchDate: new Date(matchDate),
+        roundName: roundName,
         venue,
         status: 'scheduled'
       }
@@ -39,28 +39,28 @@ export const getTournamentMatches = async (req, res) => {
   try {
     const { tournamentId } = req.params;
 
-    const matches = await prisma.matches.findMany({
+    const matches = await prisma.match.findMany({
       where: {
-        tournament_id: tournamentId
+        tournamentId: tournamentId
       },
       include: {
-        teams_matches_home_team_idToteams: {
+        homeTeam: {
           select: {
             name: true,
-            short_name: true,
-            logo_url: true
+            shortName: true,
+            logoUrl: true
           }
         },
-        teams_matches_away_team_idToteams: {
+        awayTeam: {
           select: {
             name: true,
-            short_name: true,
-            logo_url: true
+            shortName: true,
+            logoUrl: true
           }
         }
       },
       orderBy: {
-        match_date: "asc"
+        matchDate: "asc"
       }
     });
     res.status(200).json({ matches });
@@ -78,27 +78,27 @@ export const updateMatchStatus = async (req, res) => {
     const { homeScore, awayScore, status, mvpPlayerId } = req.body;
 
     // Find the match and its parent tournament
-    const match = await prisma.matches.findUnique({
+    const match = await prisma.match.findUnique({
       where: { id },
       include: {
-        tournaments: true
+        tournament: true
       }
     });
     if (!match) return res.status(404).json({ error: 'Match not found.' });
 
     // Verify permissions
-    const user = await prisma.profiles.findUnique({ where: { id: userId } });
-    if (match.tournaments.organizer_id !== userId && user.role !== 'admin') {
+    const user = await prisma.profile.findUnique({ where: { id: userId } });
+    if (match.tournament.organizerId !== userId && user.role !== 'admin') {
       return res.status(403).json({ error: 'Only the organizer can update match scores.' });
     }
 
-    const updatedMatch = await prisma.matches.update({
+    const updatedMatch = await prisma.match.update({
       where: { id },
       data: {
-        home_score: homeScore !== undefined ? homeScore : match.home_score,
-        away_score: awayScore !== undefined ? awayScore : match.away_score,
+        homeScore: homeScore !== undefined ? homeScore : match.homeScore,
+        awayScore: awayScore !== undefined ? awayScore : match.awayScore,
         status: status || match.status,
-        mvp_player_id: mvpPlayerId || match.mvp_player_id
+        mvpPlayerId: mvpPlayerId || match.mvpPlayerId
       }
     });
 

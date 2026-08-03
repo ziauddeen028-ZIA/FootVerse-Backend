@@ -10,16 +10,16 @@ export const createTeam = async (req, res) => {
       return res.status(400).json({ error: 'Team name and short name are required.' });
     }
 
-    const newTeam = await prisma.teams.create({
+    const newTeam = await prisma.team.create({
       data: {
         name,
-        short_name: shortName,
-        logo_url: logoUrl,
-        primary_color: primaryColor,
-        secondary_color: secondaryColor,
+        shortName,
+        logoUrl,
+        primaryColor,
+        secondaryColor,
         city,
-        home_ground: homeGround,
-        manager_id: managerId
+        homeGround,
+        managerId
       }
     });
 
@@ -33,7 +33,7 @@ export const createTeam = async (req, res) => {
 // READ all teams (Public)
 export const getAllTeams = async (req, res) => {
   try {
-    const teams = await prisma.teams.findMany();
+    const teams = await prisma.team.findMany();
     res.status(200).json({ teams });
   } catch (err) {
     console.error('Error fetching teams:', err);
@@ -47,12 +47,12 @@ export const getTeamById = async (req, res) => {
     const { id } = req.params;
 
     // We can also ask Prisma to "include" the manager's profile!
-    const team = await prisma.teams.findUnique({
+    const team = await prisma.team.findUnique({
       where: { id },
       include: {
-        profiles: {
+        manager: {
           select: {
-            full_name: true,
+            fullName: true,
             email: true
           }
         }
@@ -76,20 +76,20 @@ export const updateTeam = async (req, res) => {
     const updateData = req.body;
 
     // First, check if the team exists and if the user is the manager
-    const team = await prisma.teams.findUnique({ where: { id } });
+    const team = await prisma.team.findUnique({ where: { id } });
     if (!team) return res.status(404).json({ error: 'Team not found.' });
-    if (team.manager_id !== userId) return res.status(403).json({ error: 'Only the manager can update this team.' });
+    if (team.managerId !== userId) return res.status(403).json({ error: 'Only the manager can update this team.' });
 
-    const updatedTeam = await prisma.teams.update({
+    const updatedTeam = await prisma.team.update({
       where: { id },
       data: {
         name: updateData.name,
-        short_name: updateData.shortName,
-        logo_url: updateData.logoUrl,
-        primary_color: updateData.primaryColor,
-        secondary_color: updateData.secondaryColor,
+        shortName: updateData.shortName,
+        logoUrl: updateData.logoUrl,
+        primaryColor: updateData.primaryColor,
+        secondaryColor: updateData.secondaryColor,
         city: updateData.city,
-        home_ground: updateData.homeGround
+        homeGround: updateData.homeGround
       }
     });
 
@@ -107,11 +107,11 @@ export const deleteTeam = async (req, res) => {
     const userId = req.user.id;
 
     // Check ownership
-    const team = await prisma.teams.findUnique({ where: { id } });
+    const team = await prisma.team.findUnique({ where: { id } });
     if (!team) return res.status(404).json({ error: 'Team not found.' });
-    if (team.manager_id !== userId) return res.status(403).json({ error: 'Only the manager can delete this team.' });
+    if (team.managerId !== userId) return res.status(403).json({ error: 'Only the manager can delete this team.' });
 
-    await prisma.teams.delete({ where: { id } });
+    await prisma.team.delete({ where: { id } });
 
     res.status(200).json({ message: 'Team deleted successfully.' });
   } catch (err) {

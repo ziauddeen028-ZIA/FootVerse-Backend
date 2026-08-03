@@ -7,7 +7,7 @@ export const getProfile = async (req, res) => {
     const userId = req.user.id;
 
     // Ask Prisma (the Librarian) to find the profile
-    const profile = await prisma.profiles.findUnique({
+    const profile = await prisma.profile.findUnique({
       where: { id: userId }
     });
 
@@ -29,13 +29,13 @@ export const updateProfile = async (req, res) => {
     const { fullName, phone, preferredPosition, jerseyNumber, bio } = req.body;
 
     // Ask Prisma to update this specific user's record
-    const updatedProfile = await prisma.profiles.update({
+    const updatedProfile = await prisma.profile.update({
       where: { id: userId },
       data: {
-        full_name: fullName,
+        fullName,
         phone,
-        preferred_position: preferredPosition,
-        jersey_number: jerseyNumber,
+        preferredPosition,
+        jerseyNumber,
         bio
       }
     });
