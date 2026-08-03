@@ -4,22 +4,55 @@ import prisma from '../lib/prisma.js';
 export const createTeam = async (req, res) => {
   try {
     const managerId = req.user.id;
-    const { name, shortName, logoUrl, primaryColor, secondaryColor, city, homeGround } = req.body;
+    const { name, shortName, tournamentId, logoUrl, primaryColor, secondaryColor, city, homeGround } = req.body;
 
-    if (!name || !shortName) {
-      return res.status(400).json({ error: 'Team name and short name are required.' });
+    if (!name || !shortName || !tournamentId) {
+      return res.status(400).json({ error: 'Team name, short name, and tournament are required.' });
+    }
+
+    if (shortName.trim().length > 5) {
+      return res.status(400).json({ error: 'Short name must be 5 characters or fewer.' });
+    }
+
+    // Verify tournament exists
+    const tournamentExists = await prisma.tournament.findUnique({
+      where: { id: tournamentId }
+    });
+    if (!tournamentExists) {
+      return res.status(404).json({ error: 'Selected tournament not found.' });
+    }
+
+    // Check duplicate team name within the same tournament
+    const existingTeam = await prisma.team.findFirst({
+      where: {
+        tournamentId,
+        name: { equals: name.trim(), mode: 'insensitive' }
+      }
+    });
+
+    if (existingTeam) {
+      return res.status(400).json({ error: 'A team with this name already exists in the selected tournament.' });
     }
 
     const newTeam = await prisma.team.create({
       data: {
-        name,
-        shortName,
-        logoUrl,
-        primaryColor,
-        secondaryColor,
-        city,
-        homeGround,
+        name: name.trim(),
+        shortName: shortName.trim().toUpperCase(),
+        tournamentId,
+        logoUrl: logoUrl || null,
+        primaryColor: primaryColor || '#1E50FF',
+        secondaryColor: secondaryColor || '#FFFFFF',
+        city: city || null,
+        homeGround: homeGround || null,
         managerId
+      },
+      include: {
+        tournament: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
       }
     });
 
@@ -33,7 +66,17 @@ export const createTeam = async (req, res) => {
 // READ all teams (Public)
 export const getAllTeams = async (req, res) => {
   try {
-    const teams = await prisma.team.findMany();
+    const teams = await prisma.team.findMany({
+      include: {
+        tournament: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
     res.status(200).json({ teams });
   } catch (err) {
     console.error('Error fetching teams:', err);
@@ -46,10 +89,15 @@ export const getTeamById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // We can also ask Prisma to "include" the manager's profile!
     const team = await prisma.team.findUnique({
       where: { id },
       include: {
+        tournament: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
         manager: {
           select: {
             fullName: true,
@@ -75,21 +123,56 @@ export const updateTeam = async (req, res) => {
     const userId = req.user.id;
     const updateData = req.body;
 
-    // First, check if the team exists and if the user is the manager
+    // Check if team exists
     const team = await prisma.team.findUnique({ where: { id } });
     if (!team) return res.status(404).json({ error: 'Team not found.' });
-    if (team.managerId !== userId) return res.status(403).json({ error: 'Only the manager can update this team.' });
+
+    // Check if user is manager or organizer/admin
+    const user = await prisma.profile.findUnique({ where: { id: userId } });
+    if (team.managerId !== userId && user?.role !== 'organizer' && user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Only team manager, organizer, or admin can update this team.' });
+    }
+
+    const targetTournamentId = updateData.tournamentId || team.tournamentId;
+    const targetName = updateData.name ? updateData.name.trim() : team.name;
+
+    if (updateData.shortName && updateData.shortName.trim().length > 5) {
+      return res.status(400).json({ error: 'Short name must be 5 characters or fewer.' });
+    }
+
+    if (targetTournamentId && targetName) {
+      const duplicateTeam = await prisma.team.findFirst({
+        where: {
+          tournamentId: targetTournamentId,
+          name: { equals: targetName, mode: 'insensitive' },
+          NOT: { id }
+        }
+      });
+
+      if (duplicateTeam) {
+        return res.status(400).json({ error: 'A team with this name already exists in the selected tournament.' });
+      }
+    }
 
     const updatedTeam = await prisma.team.update({
       where: { id },
       data: {
-        name: updateData.name,
-        shortName: updateData.shortName,
-        logoUrl: updateData.logoUrl,
-        primaryColor: updateData.primaryColor,
-        secondaryColor: updateData.secondaryColor,
-        city: updateData.city,
-        homeGround: updateData.homeGround
+        name: targetName,
+        shortName: updateData.shortName ? updateData.shortName.trim().toUpperCase() : team.shortName,
+        tournamentId: targetTournamentId,
+        logoUrl: updateData.logoUrl !== undefined ? updateData.logoUrl : team.logoUrl,
+        primaryColor: updateData.primaryColor !== undefined ? updateData.primaryColor : team.primaryColor,
+        secondaryColor: updateData.secondaryColor !== undefined ? updateData.secondaryColor : team.secondaryColor,
+        city: updateData.city !== undefined ? updateData.city : team.city,
+        homeGround: updateData.homeGround !== undefined ? updateData.homeGround : team.homeGround
+      },
+      include: {
+        tournament: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
       }
     });
 
@@ -106,10 +189,13 @@ export const deleteTeam = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    // Check ownership
     const team = await prisma.team.findUnique({ where: { id } });
     if (!team) return res.status(404).json({ error: 'Team not found.' });
-    if (team.managerId !== userId) return res.status(403).json({ error: 'Only the manager can delete this team.' });
+
+    const user = await prisma.profile.findUnique({ where: { id: userId } });
+    if (team.managerId !== userId && user?.role !== 'organizer' && user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Only team manager, organizer, or admin can delete this team.' });
+    }
 
     await prisma.team.delete({ where: { id } });
 

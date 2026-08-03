@@ -1,5 +1,6 @@
 import express from 'express';
 import {
+  getAllTeamMembers,
   addTeamMember,
   getTeamMembersByTeam,
   updateTeamMember,
@@ -12,6 +13,7 @@ const router = express.Router();
 // Apply requireAuth middleware to all routes in this module
 router.use(requireAuth);
 
+router.get('/', getAllTeamMembers);
 router.post('/', addTeamMember);
 router.get('/team/:teamId', getTeamMembersByTeam);
 router.put('/:id', updateTeamMember);
