@@ -17,6 +17,18 @@ export const createTournament = async (req, res) => {
       return res.status(400).json({ error: 'Name, slug, and location are required.' });
     }
 
+    // Coerce and validate numeric fields before handing to Prisma.
+    // Prisma expects Int for maxTeams and Decimal for entryFee.
+    const parsedMaxTeams = maxTeams !== undefined ? Number(maxTeams) : 16;
+    const parsedEntryFee = entryFee !== undefined ? Number(entryFee) : 0;
+
+    if (!Number.isFinite(parsedMaxTeams) || parsedMaxTeams < 2) {
+      return res.status(400).json({ error: 'maxTeams must be a valid integer of at least 2.' });
+    }
+    if (!Number.isFinite(parsedEntryFee) || parsedEntryFee < 0) {
+      return res.status(400).json({ error: 'entryFee must be a valid non-negative number.' });
+    }
+
     const newTournament = await prisma.tournament.create({
       data: {
         name,
@@ -26,8 +38,8 @@ export const createTournament = async (req, res) => {
         location,
         startDate: startDate ? new Date(startDate) : null,
         endDate: endDate ? new Date(endDate) : null,
-        maxTeams: maxTeams,
-        entryFee: entryFee,
+        maxTeams: parsedMaxTeams,
+        entryFee: parsedEntryFee,
         organizerId: organizerId
       }
     });
@@ -94,6 +106,17 @@ export const updateTournament = async (req, res) => {
       return res.status(403).json({ error: 'Only the organizer can update this tournament.' });
     }
 
+    // Coerce and validate numeric fields before handing to Prisma.
+    const parsedMaxTeams = updateData.maxTeams !== undefined ? Number(updateData.maxTeams) : undefined;
+    const parsedEntryFee = updateData.entryFee !== undefined ? Number(updateData.entryFee) : undefined;
+
+    if (parsedMaxTeams !== undefined && (!Number.isFinite(parsedMaxTeams) || parsedMaxTeams < 2)) {
+      return res.status(400).json({ error: 'maxTeams must be a valid integer of at least 2.' });
+    }
+    if (parsedEntryFee !== undefined && (!Number.isFinite(parsedEntryFee) || parsedEntryFee < 0)) {
+      return res.status(400).json({ error: 'entryFee must be a valid non-negative number.' });
+    }
+
     const updatedTournament = await prisma.tournament.update({
       where: { id },
       data: {
@@ -108,8 +131,8 @@ export const updateTournament = async (req, res) => {
         endDate: updateData.endDate
           ? new Date(updateData.endDate)
           : undefined,
-        maxTeams: updateData.maxTeams,
-        entryFee: updateData.entryFee
+        maxTeams: parsedMaxTeams,
+        entryFee: parsedEntryFee
       }
     });
 
