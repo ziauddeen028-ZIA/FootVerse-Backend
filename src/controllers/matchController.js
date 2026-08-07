@@ -4,7 +4,7 @@ import prisma from '../lib/prisma.js';
 export const scheduleMatch = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue } = req.body;
+    const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue, status } = req.body;
 
     // Verify the user is the organizer of this tournament (or an admin)
     const tournament = await prisma.tournament.findUnique({ where: { id: tournamentId } });
@@ -21,15 +21,79 @@ export const scheduleMatch = async (req, res) => {
         homeTeamId: homeTeamId,
         awayTeamId: awayTeamId,
         matchDate: new Date(matchDate),
-        roundName: roundName,
-        venue,
-        status: 'scheduled'
+        roundName: roundName || 'Group Stage',
+        venue: venue || null,
+        status: status || 'scheduled'
+      },
+      include: {
+        tournament: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
+        homeTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
+        },
+        awayTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
+        }
       }
     });
 
     res.status(201).json({ message: 'Match scheduled!', match: newMatch });
   } catch (err) {
     console.error('Error scheduling match:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// READ all matches
+export const getAllMatches = async (req, res) => {
+  try {
+    const matches = await prisma.match.findMany({
+      include: {
+        tournament: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
+        homeTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
+        },
+        awayTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
+        }
+      },
+      orderBy: {
+        matchDate: "asc"
+      }
+    });
+
+    res.status(200).json({ matches });
+  } catch (err) {
+    console.error('Error fetching all matches:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 };
@@ -44,8 +108,15 @@ export const getTournamentMatches = async (req, res) => {
         tournamentId: tournamentId
       },
       include: {
+        tournament: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
         homeTeam: {
           select: {
+            id: true,
             name: true,
             shortName: true,
             logoUrl: true
@@ -53,6 +124,7 @@ export const getTournamentMatches = async (req, res) => {
         },
         awayTeam: {
           select: {
+            id: true,
             name: true,
             shortName: true,
             logoUrl: true
@@ -70,12 +142,12 @@ export const getTournamentMatches = async (req, res) => {
   }
 };
 
-// UPDATE match score and status
+// UPDATE match details, score, and status
 export const updateMatchStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const { homeScore, awayScore, status, mvpPlayerId } = req.body;
+    const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue, homeScore, awayScore, status, mvpPlayerId } = req.body;
 
     // Find the match and its parent tournament
     const match = await prisma.match.findUnique({
@@ -88,17 +160,48 @@ export const updateMatchStatus = async (req, res) => {
 
     // Verify permissions
     const user = await prisma.profile.findUnique({ where: { id: userId } });
-    if (match.tournament.organizerId !== userId && user.role !== 'admin') {
-      return res.status(403).json({ error: 'Only the organizer can update match scores.' });
+    if (match.tournament && match.tournament.organizerId !== userId && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the organizer can update matches.' });
     }
+
+    const updateData = {};
+    if (tournamentId !== undefined) updateData.tournamentId = tournamentId;
+    if (homeTeamId !== undefined) updateData.homeTeamId = homeTeamId;
+    if (awayTeamId !== undefined) updateData.awayTeamId = awayTeamId;
+    if (matchDate !== undefined) updateData.matchDate = new Date(matchDate);
+    if (roundName !== undefined) updateData.roundName = roundName;
+    if (venue !== undefined) updateData.venue = venue;
+    if (homeScore !== undefined) updateData.homeScore = homeScore;
+    if (awayScore !== undefined) updateData.awayScore = awayScore;
+    if (status !== undefined) updateData.status = status;
+    if (mvpPlayerId !== undefined) updateData.mvpPlayerId = mvpPlayerId;
 
     const updatedMatch = await prisma.match.update({
       where: { id },
-      data: {
-        homeScore: homeScore !== undefined ? homeScore : match.homeScore,
-        awayScore: awayScore !== undefined ? awayScore : match.awayScore,
-        status: status || match.status,
-        mvpPlayerId: mvpPlayerId || match.mvpPlayerId
+      data: updateData,
+      include: {
+        tournament: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
+        homeTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
+        },
+        awayTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
+        }
       }
     });
 
@@ -108,3 +211,33 @@ export const updateMatchStatus = async (req, res) => {
     res.status(500).json({ error: 'Internal server error.' });
   }
 };
+
+// DELETE a match
+export const deleteMatch = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const match = await prisma.match.findUnique({
+      where: { id },
+      include: {
+        tournament: true
+      }
+    });
+
+    if (!match) return res.status(404).json({ error: 'Match not found.' });
+
+    const user = await prisma.profile.findUnique({ where: { id: userId } });
+    if (match.tournament && match.tournament.organizerId !== userId && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the organizer can delete matches.' });
+    }
+
+    await prisma.match.delete({ where: { id } });
+
+    res.status(200).json({ message: 'Match deleted successfully!' });
+  } catch (err) {
+    console.error('Error deleting match:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
