@@ -98,6 +98,35 @@ export const getAllMatches = async (req, res) => {
   }
 };
 
+// READ a single match by ID
+export const getMatchById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const match = await prisma.match.findUnique({
+      where: { id },
+      include: {
+        tournament: {
+          select: { id: true, name: true }
+        },
+        homeTeam: {
+          select: { id: true, name: true, shortName: true, logoUrl: true }
+        },
+        awayTeam: {
+          select: { id: true, name: true, shortName: true, logoUrl: true }
+        }
+      }
+    });
+
+    if (!match) return res.status(404).json({ error: 'Match not found.' });
+
+    res.status(200).json({ match });
+  } catch (err) {
+    console.error('Error fetching match by ID:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
 // READ all matches for a specific tournament
 export const getTournamentMatches = async (req, res) => {
   try {
