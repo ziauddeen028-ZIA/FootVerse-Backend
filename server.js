@@ -12,6 +12,8 @@ import matchRoutes from './src/routes/matchRoutes.js';
 import statsRoutes from './src/routes/statsRoutes.js';
 import teamMemberRoutes from './src/routes/teamMemberRoutes.js';
 import matchEventRoutes from './src/routes/matchEventRoutes.js';
+import standingsRoutes from './src/routes/standingsRoutes.js';
+import knockoutRoutes from './src/routes/knockoutRoutes.js';
 
 dotenv.config();
 
@@ -38,6 +40,8 @@ app.use('/api/matches', matchRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/team-members', teamMemberRoutes);
 app.use('/api/match-events', matchEventRoutes);
+app.use('/api/tournaments', standingsRoutes);
+app.use('/api/tournaments', knockoutRoutes);
 
 // Health Check API Endpoint
 app.get('/api/health', (req, res) => {

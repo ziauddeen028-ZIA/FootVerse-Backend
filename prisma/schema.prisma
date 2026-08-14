@@ -73,6 +73,7 @@ model Team {
   secondaryColor String?      @default("#FFFFFF") @map("secondary_color") @db.VarChar(10)
   city           String?
   homeGround     String?      @map("home_ground")
+  groupName      String?      @map("group_name")
   createdAt      DateTime?    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime?    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   matchEvents    MatchEvent[]
@@ -105,23 +106,30 @@ model TeamMember {
 model Match {
   id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   tournamentId String?      @map("tournament_id") @db.Uuid
-  homeTeamId   String?      @map("home_team_id") @db.Uuid
-  awayTeamId   String?      @map("away_team_id") @db.Uuid
-  homeScore    Int?         @default(0) @map("home_score")
-  awayScore    Int?         @default(0) @map("away_score")
-  status       MatchStatus? @default(scheduled)
-  roundName    String?      @default("Group Stage") @map("round_name")
-  matchDate    DateTime     @map("match_date") @db.Timestamptz(6)
-  venue        String?
-  refereeName  String?      @map("referee_name")
-  mvpPlayerId  String?      @map("mvp_player_id") @db.Uuid
-  createdAt    DateTime?    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime?    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  events       MatchEvent[]
-  awayTeam     Team?        @relation("AwayTeam", fields: [awayTeamId], references: [id], onUpdate: NoAction)
-  homeTeam     Team?        @relation("HomeTeam", fields: [homeTeamId], references: [id], onUpdate: NoAction)
-  mvpPlayer    Profile?     @relation("MatchMVP", fields: [mvpPlayerId], references: [id], onUpdate: NoAction)
-  tournament   Tournament?  @relation(fields: [tournamentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  homeTeamId        String?      @map("home_team_id") @db.Uuid
+  awayTeamId        String?      @map("away_team_id") @db.Uuid
+  homeSourceMatchId String?      @map("home_source_match_id") @db.Uuid
+  awaySourceMatchId String?      @map("away_source_match_id") @db.Uuid
+  homeScore         Int?         @default(0) @map("home_score")
+  awayScore         Int?         @default(0) @map("away_score")
+  status            MatchStatus? @default(scheduled)
+  roundName         String?      @default("Group Stage") @map("round_name")
+  bracketPosition   Int?         @map("bracket_position")
+  matchDate         DateTime     @map("match_date") @db.Timestamptz(6)
+  venue             String?
+  refereeName       String?      @map("referee_name")
+  mvpPlayerId       String?      @map("mvp_player_id") @db.Uuid
+  createdAt         DateTime?    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime?    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  events            MatchEvent[]
+  awayTeam          Team?        @relation("AwayTeam", fields: [awayTeamId], references: [id], onUpdate: NoAction)
+  homeTeam          Team?        @relation("HomeTeam", fields: [homeTeamId], references: [id], onUpdate: NoAction)
+  mvpPlayer         Profile?     @relation("MatchMVP", fields: [mvpPlayerId], references: [id], onUpdate: NoAction)
+  tournament        Tournament?  @relation(fields: [tournamentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  homeSourceMatch   Match?       @relation("HomeSourceMatch", fields: [homeSourceMatchId], references: [id], onUpdate: NoAction)
+  homeNextMatches   Match[]      @relation("HomeSourceMatch")
+  awaySourceMatch   Match?       @relation("AwaySourceMatch", fields: [awaySourceMatchId], references: [id], onUpdate: NoAction)
+  awayNextMatches   Match[]      @relation("AwaySourceMatch")
 
   @@map("matches")
   @@schema("public")

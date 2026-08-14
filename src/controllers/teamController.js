@@ -164,7 +164,8 @@ export const updateTeam = async (req, res) => {
         primaryColor: updateData.primaryColor !== undefined ? updateData.primaryColor : team.primaryColor,
         secondaryColor: updateData.secondaryColor !== undefined ? updateData.secondaryColor : team.secondaryColor,
         city: updateData.city !== undefined ? updateData.city : team.city,
-        homeGround: updateData.homeGround !== undefined ? updateData.homeGround : team.homeGround
+        homeGround: updateData.homeGround !== undefined ? updateData.homeGround : team.homeGround,
+        groupName: updateData.groupName !== undefined ? updateData.groupName : team.groupName
       },
       include: {
         tournament: {
