@@ -79,6 +79,7 @@ model Team {
   matchEvents    MatchEvent[]
   awayMatches    Match[]      @relation("AwayTeam")
   homeMatches    Match[]      @relation("HomeTeam")
+  wonMatches     Match[]      @relation("WinnerTeam")
   members        TeamMember[]
   manager        Profile?     @relation(fields: [managerId], references: [id], onUpdate: NoAction)
   tournament     Tournament?  @relation(fields: [tournamentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -104,14 +105,18 @@ model TeamMember {
 }
 
 model Match {
-  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tournamentId String?      @map("tournament_id") @db.Uuid
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tournamentId      String?      @map("tournament_id") @db.Uuid
   homeTeamId        String?      @map("home_team_id") @db.Uuid
   awayTeamId        String?      @map("away_team_id") @db.Uuid
   homeSourceMatchId String?      @map("home_source_match_id") @db.Uuid
   awaySourceMatchId String?      @map("away_source_match_id") @db.Uuid
   homeScore         Int?         @default(0) @map("home_score")
   awayScore         Int?         @default(0) @map("away_score")
+  homePenaltyScore  Int?         @map("home_penalty_score")
+  awayPenaltyScore  Int?         @map("away_penalty_score")
+  tieBreakMethod    String?      @map("tie_break_method")
+  winnerTeamId      String?      @map("winner_team_id") @db.Uuid
   status            MatchStatus? @default(scheduled)
   roundName         String?      @default("Group Stage") @map("round_name")
   bracketPosition   Int?         @map("bracket_position")
@@ -124,6 +129,7 @@ model Match {
   events            MatchEvent[]
   awayTeam          Team?        @relation("AwayTeam", fields: [awayTeamId], references: [id], onUpdate: NoAction)
   homeTeam          Team?        @relation("HomeTeam", fields: [homeTeamId], references: [id], onUpdate: NoAction)
+  winnerTeam        Team?        @relation("WinnerTeam", fields: [winnerTeamId], references: [id], onUpdate: NoAction)
   mvpPlayer         Profile?     @relation("MatchMVP", fields: [mvpPlayerId], references: [id], onUpdate: NoAction)
   tournament        Tournament?  @relation(fields: [tournamentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   homeSourceMatch   Match?       @relation("HomeSourceMatch", fields: [homeSourceMatchId], references: [id], onUpdate: NoAction)

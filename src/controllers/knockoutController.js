@@ -299,3 +299,232 @@ export const updateKnockoutMatch = async (req, res) => {
     return res.status(500).json({ error: 'Internal server error.' });
   }
 };
+
+/**
+ * PUT /api/tournaments/:tournamentId/knockout/matches/:matchId/result
+ * Updates the result of a knockout match, including score, tie-break method, and winner.
+ */
+export const updateKnockoutMatchResult = async (req, res) => {
+  try {
+    const { tournamentId, matchId } = req.params;
+    const userId = req.user.id;
+
+    // 1. Verify tournament exists & user authorization
+    const tournament = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      select: { id: true, name: true, organizerId: true }
+    });
+
+    if (!tournament) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+
+    const user = await prisma.profile.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true }
+    });
+
+    if (!user || (tournament.organizerId !== userId && user.role !== 'admin')) {
+      return res.status(403).json({ error: 'Only the tournament organizer or an admin can update knockout match results.' });
+    }
+
+    // 2. Verify match exists, belongs to tournament, and is a knockout match
+    const existingMatch = await prisma.match.findUnique({
+      where: { id: matchId }
+    });
+
+    if (!existingMatch || existingMatch.tournamentId !== tournamentId || existingMatch.bracketPosition === null) {
+      return res.status(404).json({ error: 'Match not found in this tournament or is not a knockout match.' });
+    }
+
+    // 3. Both teams must exist on the match
+    if (!existingMatch.homeTeamId || !existingMatch.awayTeamId) {
+      return res.status(400).json({ error: 'Both home and away teams must be set before submitting a match result.' });
+    }
+
+    const { homeScore, awayScore, tieBreakMethod, homePenaltyScore, awayPenaltyScore, winnerTeamId } = req.body;
+
+    // 4. Validate scores are non-negative integers
+    if (
+      homeScore === undefined || homeScore === null || typeof homeScore !== 'number' || !Number.isInteger(homeScore) || homeScore < 0 ||
+      awayScore === undefined || awayScore === null || typeof awayScore !== 'number' || !Number.isInteger(awayScore) || awayScore < 0
+    ) {
+      return res.status(400).json({ error: 'Home score and away score must be non-negative integers.' });
+    }
+
+    let finalWinnerTeamId = null;
+    let finalTieBreakMethod = null;
+    let finalHomePenaltyScore = null;
+    let finalAwayPenaltyScore = null;
+
+    // 5. Evaluate match outcome
+    if (homeScore !== awayScore) {
+      // Normal Win: Winner derived from match score, clear penalty fields
+      finalWinnerTeamId = homeScore > awayScore ? existingMatch.homeTeamId : existingMatch.awayTeamId;
+      finalTieBreakMethod = null;
+      finalHomePenaltyScore = null;
+      finalAwayPenaltyScore = null;
+    } else {
+      // Draw: Penalty or Toss required
+      if (!tieBreakMethod || (tieBreakMethod !== 'penalty' && tieBreakMethod !== 'toss')) {
+        return res.status(400).json({ error: 'A draw in a knockout match requires a valid tieBreakMethod ("penalty" or "toss").' });
+      }
+
+      if (tieBreakMethod === 'penalty') {
+        if (
+          homePenaltyScore === undefined || homePenaltyScore === null || typeof homePenaltyScore !== 'number' || !Number.isInteger(homePenaltyScore) || homePenaltyScore < 0 ||
+          awayPenaltyScore === undefined || awayPenaltyScore === null || typeof awayPenaltyScore !== 'number' || !Number.isInteger(awayPenaltyScore) || awayPenaltyScore < 0
+        ) {
+          return res.status(400).json({ error: 'Penalty shootout scores are required and must be non-negative integers.' });
+        }
+
+        if (homePenaltyScore === awayPenaltyScore) {
+          return res.status(400).json({ error: 'Penalty scores cannot be equal.' });
+        }
+
+        finalWinnerTeamId = homePenaltyScore > awayPenaltyScore ? existingMatch.homeTeamId : existingMatch.awayTeamId;
+        finalTieBreakMethod = 'penalty';
+        finalHomePenaltyScore = homePenaltyScore;
+        finalAwayPenaltyScore = awayPenaltyScore;
+      } else if (tieBreakMethod === 'toss') {
+        if (!winnerTeamId || (winnerTeamId !== existingMatch.homeTeamId && winnerTeamId !== existingMatch.awayTeamId)) {
+          return res.status(400).json({ error: 'Toss winnerTeamId is required and must be either the home team or away team.' });
+        }
+
+        finalWinnerTeamId = winnerTeamId;
+        finalTieBreakMethod = 'toss';
+        finalHomePenaltyScore = null;
+        finalAwayPenaltyScore = null;
+      }
+    }
+
+    // 6. Check if this match is the Final
+    const isFinal = existingMatch.roundName === 'Final';
+
+    // 7. Save result, advance winner, and update tournament status if Final atomically in a transaction
+    const { updatedMatch, advancedTo } = await prisma.$transaction(async (tx) => {
+      const match = await tx.match.update({
+        where: { id: matchId },
+        data: {
+          homeScore,
+          awayScore,
+          homePenaltyScore: finalHomePenaltyScore,
+          awayPenaltyScore: finalAwayPenaltyScore,
+          tieBreakMethod: finalTieBreakMethod,
+          winnerTeamId: finalWinnerTeamId,
+          status: 'fulltime'
+        },
+        include: {
+          homeTeam: {
+            select: {
+              id: true,
+              name: true,
+              shortName: true,
+              logoUrl: true
+            }
+          },
+          awayTeam: {
+            select: {
+              id: true,
+              name: true,
+              shortName: true,
+              logoUrl: true
+            }
+          },
+          winnerTeam: {
+            select: {
+              id: true,
+              name: true,
+              shortName: true,
+              logoUrl: true
+            }
+          },
+          tournament: {
+            select: {
+              id: true,
+              name: true
+            }
+          }
+        }
+      });
+
+      // If this is the Final, update the tournament status to completed
+      if (isFinal) {
+        await tx.tournament.update({
+          where: { id: tournamentId },
+          data: { status: 'completed' }
+        });
+      }
+
+      // 8. Find next knockout match where homeSourceMatchId or awaySourceMatchId is current match ID
+      const nextMatch = await tx.match.findFirst({
+        where: {
+          tournamentId,
+          OR: [
+            { homeSourceMatchId: matchId },
+            { awaySourceMatchId: matchId }
+          ]
+        }
+      });
+
+      let nextMatchAdvanced = null;
+
+      if (nextMatch) {
+        const nextMatchUpdateData = {};
+        if (nextMatch.homeSourceMatchId === matchId) {
+          nextMatchUpdateData.homeTeamId = finalWinnerTeamId;
+        }
+        if (nextMatch.awaySourceMatchId === matchId) {
+          nextMatchUpdateData.awayTeamId = finalWinnerTeamId;
+        }
+
+        if (Object.keys(nextMatchUpdateData).length > 0) {
+          nextMatchAdvanced = await tx.match.update({
+            where: { id: nextMatch.id },
+            data: nextMatchUpdateData,
+            include: {
+              homeTeam: {
+                select: {
+                  id: true,
+                  name: true,
+                  shortName: true,
+                  logoUrl: true
+                }
+              },
+              awayTeam: {
+                select: {
+                  id: true,
+                  name: true,
+                  shortName: true,
+                  logoUrl: true
+                }
+              }
+            }
+          });
+        }
+      }
+
+      return { updatedMatch: match, advancedTo: nextMatchAdvanced };
+    });
+
+    const champion = isFinal && updatedMatch.winnerTeam ? {
+      id: updatedMatch.winnerTeam.id,
+      name: updatedMatch.winnerTeam.name,
+      shortName: updatedMatch.winnerTeam.shortName,
+      logoUrl: updatedMatch.winnerTeam.logoUrl
+    } : null;
+
+    return res.status(200).json({
+      message: isFinal ? 'Final match completed and tournament completed successfully.' : 'Knockout match result updated successfully.',
+      match: updatedMatch,
+      winnerTeam: updatedMatch.winnerTeam,
+      advancedTo: advancedTo || null,
+      champion
+    });
+
+  } catch (err) {
+    console.error('Error updating knockout match result:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
