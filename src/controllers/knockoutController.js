@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma.js';
+import { calculateGroupStandings } from './standingsController.js';
 
 /**
  * Helper to generate round specifications for a given team count.
@@ -30,6 +31,128 @@ const getRoundSpecs = (teamCount) => {
   }
 
   return roundSpecs;
+};
+
+/**
+ * Pairs qualified teams from group stage standings into first-round knockout matchups.
+ * Implements crossover pairing (e.g. Group A 1st vs Group B 2nd, Group B 1st vs Group A 2nd).
+ */
+const pairQualifiedTeams = (groups, qualifyingTeamsPerGroup) => {
+  const G = groups.length;
+  const Q = qualifyingTeamsPerGroup;
+
+  if (G % 2 === 0 && Q === 2) {
+    const topHalf = [];
+    const bottomHalf = [];
+
+    for (let k = 0; k < G / 2; k++) {
+      const g1 = groups[2 * k];
+      const g2 = groups[2 * k + 1];
+
+      // Top half match: g1 rank 1 vs g2 rank 2
+      topHalf.push(g1.standings[0].team);
+      topHalf.push(g2.standings[1].team);
+
+      // Bottom half match: g2 rank 1 vs g1 rank 2
+      bottomHalf.push(g2.standings[0].team);
+      bottomHalf.push(g1.standings[1].team);
+    }
+
+    return [...topHalf, ...bottomHalf];
+  }
+
+  if (G % 2 === 0 && Q === 1) {
+    const paired = [];
+    for (let k = 0; k < G / 2; k++) {
+      paired.push(groups[2 * k].standings[0].team);
+      paired.push(groups[2 * k + 1].standings[0].team);
+    }
+    return paired;
+  }
+
+  // Fallback / general seeding across groups:
+  // Take top Q positions from each group
+  const qualified = [];
+  for (let pos = 0; pos < Q; pos++) {
+    for (let g = 0; g < G; g++) {
+      if (groups[g].standings[pos]) {
+        qualified.push(groups[g].standings[pos].team);
+      }
+    }
+  }
+
+  return qualified;
+};
+
+/**
+ * Helper to create knockout matches in a database transaction.
+ * Reused by both pure knockout generation and hybrid bracket generation.
+ */
+export const createBracketMatches = async (tx, tournamentId, teams, startDate) => {
+  const teamCount = teams.length;
+  const roundSpecs = getRoundSpecs(teamCount);
+
+  const baseDate = startDate && !isNaN(new Date(startDate).getTime())
+    ? new Date(startDate)
+    : new Date();
+
+  const allMatches = [];
+  let previousRoundMatches = [];
+
+  for (let rIndex = 0; rIndex < roundSpecs.length; rIndex++) {
+    const spec = roundSpecs[rIndex];
+    const isFirstRound = (rIndex === 0);
+    const currentRoundMatches = [];
+
+    const roundDate = new Date(baseDate.getTime() + rIndex * 24 * 60 * 60 * 1000);
+
+    for (let mIndex = 0; mIndex < spec.matchCount; mIndex++) {
+      const bracketPosition = mIndex + 1;
+      const matchDate = new Date(roundDate.getTime() + mIndex * 2 * 60 * 60 * 1000);
+
+      let homeTeamId = null;
+      let awayTeamId = null;
+      let homeSourceMatchId = null;
+      let awaySourceMatchId = null;
+
+      if (isFirstRound) {
+        homeTeamId = teams[2 * mIndex]?.id || null;
+        awayTeamId = teams[2 * mIndex + 1]?.id || null;
+      } else {
+        homeSourceMatchId = previousRoundMatches[2 * mIndex]?.id || null;
+        awaySourceMatchId = previousRoundMatches[2 * mIndex + 1]?.id || null;
+      }
+
+      const match = await tx.match.create({
+        data: {
+          tournamentId,
+          roundName: spec.roundName,
+          bracketPosition,
+          matchDate,
+          homeTeamId,
+          awayTeamId,
+          homeSourceMatchId,
+          awaySourceMatchId,
+          status: 'scheduled'
+        },
+        include: {
+          homeTeam: {
+            select: { id: true, name: true, shortName: true, logoUrl: true }
+          },
+          awayTeam: {
+            select: { id: true, name: true, shortName: true, logoUrl: true }
+          }
+        }
+      });
+
+      currentRoundMatches.push(match);
+      allMatches.push(match);
+    }
+
+    previousRoundMatches = currentRoundMatches;
+  }
+
+  return { roundSpecs, createdMatches: allMatches };
 };
 
 /**
@@ -81,76 +204,12 @@ export const generateKnockoutBracket = async (req, res) => {
       });
     }
 
-    // 5. Get round specifications
-    const roundSpecs = getRoundSpecs(teamCount);
-
-    const baseDate = tournament.startDate && !isNaN(new Date(tournament.startDate).getTime())
-      ? new Date(tournament.startDate)
-      : new Date();
-
-    // 6. Execute atomic bracket creation inside a Prisma transaction
-    const createdMatches = await prisma.$transaction(async (tx) => {
-      const allMatches = [];
-      let previousRoundMatches = [];
-
-      for (let rIndex = 0; rIndex < roundSpecs.length; rIndex++) {
-        const spec = roundSpecs[rIndex];
-        const isFirstRound = (rIndex === 0);
-        const currentRoundMatches = [];
-
-        // Increment base date by 1 day per round
-        const roundDate = new Date(baseDate.getTime() + rIndex * 24 * 60 * 60 * 1000);
-
-        for (let mIndex = 0; mIndex < spec.matchCount; mIndex++) {
-          const bracketPosition = mIndex + 1;
-          const matchDate = new Date(roundDate.getTime() + mIndex * 2 * 60 * 60 * 1000);
-
-          let homeTeamId = null;
-          let awayTeamId = null;
-          let homeSourceMatchId = null;
-          let awaySourceMatchId = null;
-
-          if (isFirstRound) {
-            homeTeamId = teams[2 * mIndex]?.id || null;
-            awayTeamId = teams[2 * mIndex + 1]?.id || null;
-          } else {
-            homeSourceMatchId = previousRoundMatches[2 * mIndex]?.id || null;
-            awaySourceMatchId = previousRoundMatches[2 * mIndex + 1]?.id || null;
-          }
-
-          const match = await tx.match.create({
-            data: {
-              tournamentId,
-              roundName: spec.roundName,
-              bracketPosition,
-              matchDate,
-              homeTeamId,
-              awayTeamId,
-              homeSourceMatchId,
-              awaySourceMatchId,
-              status: 'scheduled'
-            },
-            include: {
-              homeTeam: {
-                select: { id: true, name: true, shortName: true, logoUrl: true }
-              },
-              awayTeam: {
-                select: { id: true, name: true, shortName: true, logoUrl: true }
-              }
-            }
-          });
-
-          currentRoundMatches.push(match);
-          allMatches.push(match);
-        }
-
-        previousRoundMatches = currentRoundMatches;
-      }
-
-      return allMatches;
+    // 5. Execute atomic bracket creation inside a Prisma transaction
+    const { roundSpecs, createdMatches } = await prisma.$transaction(async (tx) => {
+      return await createBracketMatches(tx, tournamentId, teams, tournament.startDate);
     });
 
-    // 7. Group generated matches by round
+    // 6. Group generated matches by round
     const bracket = {};
     for (const spec of roundSpecs) {
       bracket[spec.roundName] = createdMatches.filter(m => m.roundName === spec.roundName);
@@ -168,6 +227,148 @@ export const generateKnockoutBracket = async (req, res) => {
 
   } catch (err) {
     console.error('Error generating knockout bracket:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+/**
+ * POST /api/tournaments/:tournamentId/hybrid/generate
+ * Generates a hybrid tournament knockout bracket from group stage standings.
+ */
+export const generateHybridKnockoutBracket = async (req, res) => {
+  try {
+    const { tournamentId } = req.params;
+
+    // 1. Verify tournament exists
+    const tournament = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      select: { id: true, name: true, format: true, startDate: true, organizerId: true }
+    });
+
+    if (!tournament) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+
+    // 2. Validate format = hybrid
+    if (tournament.format !== 'hybrid') {
+      return res.status(400).json({ error: 'Tournament format must be hybrid.' });
+    }
+
+    if (req.user) {
+      const user = await prisma.profile.findUnique({
+        where: { id: req.user.id },
+        select: { id: true, role: true }
+      });
+      if (!user || (tournament.organizerId !== req.user.id && user.role !== 'admin')) {
+        return res.status(403).json({ error: 'Only the tournament organizer or an admin can generate hybrid brackets.' });
+      }
+    }
+
+    // 3. Check if knockout bracket already exists
+    const existingKnockoutMatch = await prisma.match.findFirst({
+      where: {
+        tournamentId,
+        bracketPosition: { not: null }
+      }
+    });
+
+    if (existingKnockoutMatch) {
+      return res.status(400).json({
+        error: 'Knockout bracket already exists for this tournament.'
+      });
+    }
+
+    // 4. Fetch registered teams & validate groupName requirement
+    const teams = await prisma.team.findMany({
+      where: { tournamentId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, name: true, shortName: true, logoUrl: true, groupName: true }
+    });
+
+    if (!teams || teams.length === 0) {
+      return res.status(400).json({ error: 'No teams registered for this tournament.' });
+    }
+
+    const missingGroup = teams.some(t => !t.groupName || t.groupName.trim() === '');
+    if (missingGroup) {
+      return res.status(400).json({ error: 'All registered teams must be assigned to a group (groupName).' });
+    }
+
+    // 5. Configurable number of qualifying teams per group
+    const qualifyingTeamsPerGroup = req.body.qualifyingTeamsPerGroup !== undefined
+      ? Number(req.body.qualifyingTeamsPerGroup)
+      : (req.body.qualifyingCount !== undefined ? Number(req.body.qualifyingCount) : 2);
+
+    if (!Number.isInteger(qualifyingTeamsPerGroup) || qualifyingTeamsPerGroup < 1) {
+      return res.status(400).json({ error: 'qualifyingTeamsPerGroup must be a positive integer.' });
+    }
+
+    // 6. Calculate group standings using existing standings logic
+    const completedMatches = await prisma.match.findMany({
+      where: {
+        tournamentId,
+        status: 'fulltime'
+      },
+      select: {
+        id: true,
+        homeTeamId: true,
+        awayTeamId: true,
+        homeScore: true,
+        awayScore: true
+      }
+    });
+
+    const groups = calculateGroupStandings(teams, completedMatches);
+
+    if (groups.length === 0) {
+      return res.status(400).json({ error: 'No groups found for this tournament.' });
+    }
+
+    // 7. Select qualified teams based on group position
+    for (const group of groups) {
+      if (group.standings.length < qualifyingTeamsPerGroup) {
+        return res.status(400).json({
+          error: `Group "${group.name}" has ${group.standings.length} teams, which is less than the required ${qualifyingTeamsPerGroup} qualifying teams.`
+        });
+      }
+    }
+
+    const totalQualifiedCount = groups.length * qualifyingTeamsPerGroup;
+    const supportedCounts = [4, 8, 16, 32, 64];
+
+    if (!supportedCounts.includes(totalQualifiedCount)) {
+      return res.status(400).json({
+        error: `Knockout bracket generation requires 4, 8, 16, 32, or 64 qualifying teams. Current qualifying team count is ${totalQualifiedCount}.`
+      });
+    }
+
+    // Pair qualified teams using crossover ordering
+    const orderedQualifiedTeams = pairQualifiedTeams(groups, qualifyingTeamsPerGroup);
+
+    // 8. Generate knockout bracket using Prisma transaction and existing bracket generator helper
+    const { roundSpecs, createdMatches } = await prisma.$transaction(async (tx) => {
+      return await createBracketMatches(tx, tournamentId, orderedQualifiedTeams, tournament.startDate);
+    });
+
+    // 9. Group generated matches by round
+    const bracket = {};
+    for (const spec of roundSpecs) {
+      bracket[spec.roundName] = createdMatches.filter(m => m.roundName === spec.roundName);
+    }
+
+    return res.status(201).json({
+      message: 'Hybrid knockout bracket generated successfully.',
+      tournament: {
+        id: tournament.id,
+        name: tournament.name
+      },
+      qualifyingTeamsPerGroup,
+      totalMatches: createdMatches.length,
+      bracket
+    });
+
+  } catch (err) {
+    console.error('Error generating hybrid knockout bracket:', err);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 };
