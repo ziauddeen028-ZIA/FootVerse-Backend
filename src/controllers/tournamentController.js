@@ -54,9 +54,25 @@ export const createTournament = async (req, res) => {
 // READ all tournaments (Public)
 export const getAllTournaments = async (req, res) => {
   try {
-    const tournaments = await prisma.tournament.findMany({
+    const rawTournaments = await prisma.tournament.findMany({
+      include: {
+        _count: {
+          select: {
+            teams: true
+          }
+        }
+      },
       orderBy: { createdAt: 'desc' }
     });
+
+    const tournaments = rawTournaments.map(t => {
+      const { _count, ...rest } = t;
+      return {
+        ...rest,
+        registeredTeamsCount: _count?.teams ?? 0
+      };
+    });
+
     res.status(200).json({ tournaments });
   } catch (err) {
     console.error('Error fetching tournaments:', err);
@@ -69,7 +85,7 @@ export const getTournamentBySlug = async (req, res) => {
   try {
     const { slug } = req.params;
 
-    const tournament = await prisma.tournament.findUnique({
+    const rawTournament = await prisma.tournament.findUnique({
       where: { slug },
       include: {
         organizer: {
@@ -77,11 +93,22 @@ export const getTournamentBySlug = async (req, res) => {
             fullName: true,
             email: true
           }
+        },
+        _count: {
+          select: {
+            teams: true
+          }
         }
       }
     });
 
-    if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+    if (!rawTournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+    const { _count, ...rest } = rawTournament;
+    const tournament = {
+      ...rest,
+      registeredTeamsCount: _count?.teams ?? 0
+    };
 
     res.status(200).json({ tournament });
   } catch (err) {

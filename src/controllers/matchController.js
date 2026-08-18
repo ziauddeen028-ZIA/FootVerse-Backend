@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma.js';
+import { advanceKnockoutWinner } from './knockoutController.js';
 
 // CREATE (Schedule) a new match
 export const scheduleMatch = async (req, res) => {
@@ -107,12 +108,15 @@ export const getMatchById = async (req, res) => {
       where: { id },
       include: {
         tournament: {
-          select: { id: true, name: true }
+          select: { id: true, name: true, format: true }
         },
         homeTeam: {
           select: { id: true, name: true, shortName: true, logoUrl: true }
         },
         awayTeam: {
+          select: { id: true, name: true, shortName: true, logoUrl: true }
+        },
+        winnerTeam: {
           select: { id: true, name: true, shortName: true, logoUrl: true }
         }
       }
@@ -176,7 +180,7 @@ export const updateMatchStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue, homeScore, awayScore, status, mvpPlayerId } = req.body;
+    const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue, homeScore, awayScore, status, mvpPlayerId, winnerTeamId, tieBreakMethod, homePenaltyScore, awayPenaltyScore } = req.body;
 
     // Find the match and its parent tournament
     const match = await prisma.match.findUnique({
@@ -204,6 +208,10 @@ export const updateMatchStatus = async (req, res) => {
     if (awayScore !== undefined) updateData.awayScore = awayScore;
     if (status !== undefined) updateData.status = status;
     if (mvpPlayerId !== undefined) updateData.mvpPlayerId = mvpPlayerId;
+    if (winnerTeamId !== undefined) updateData.winnerTeamId = winnerTeamId;
+    if (tieBreakMethod !== undefined) updateData.tieBreakMethod = tieBreakMethod;
+    if (homePenaltyScore !== undefined) updateData.homePenaltyScore = homePenaltyScore;
+    if (awayPenaltyScore !== undefined) updateData.awayPenaltyScore = awayPenaltyScore;
 
     const updatedMatch = await prisma.match.update({
       where: { id },
@@ -212,7 +220,8 @@ export const updateMatchStatus = async (req, res) => {
         tournament: {
           select: {
             id: true,
-            name: true
+            name: true,
+            format: true
           }
         },
         homeTeam: {
@@ -230,9 +239,31 @@ export const updateMatchStatus = async (req, res) => {
             shortName: true,
             logoUrl: true
           }
+        },
+        winnerTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
         }
       }
     });
+
+    if ((updatedMatch.status === 'fulltime' || updatedMatch.status === 'completed') && updatedMatch.winnerTeamId && updatedMatch.tournamentId) {
+      try {
+        await advanceKnockoutWinner(prisma, updatedMatch.tournamentId, id, updatedMatch.winnerTeamId, match);
+        if (match.roundName === 'Final') {
+          await prisma.tournament.update({
+            where: { id: updatedMatch.tournamentId },
+            data: { status: 'completed' }
+          });
+        }
+      } catch (advErr) {
+        console.warn('Knockout auto-advancement note:', advErr);
+      }
+    }
 
     res.status(200).json({ message: 'Match updated!', match: updatedMatch });
   } catch (err) {

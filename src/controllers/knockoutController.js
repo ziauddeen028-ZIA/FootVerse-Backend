@@ -502,6 +502,94 @@ export const updateKnockoutMatch = async (req, res) => {
 };
 
 /**
+ * Helper to advance the winner of a knockout match to the next round match.
+ */
+export const advanceKnockoutWinner = async (tx, tournamentId, matchId, winnerTeamId, existingMatch) => {
+  if (!tournamentId || !winnerTeamId || !matchId) return null;
+
+  // 1. Find next knockout match where homeSourceMatchId or awaySourceMatchId is current match ID
+  let nextMatch = await tx.match.findFirst({
+    where: {
+      tournamentId,
+      OR: [
+        { homeSourceMatchId: matchId },
+        { awaySourceMatchId: matchId }
+      ]
+    }
+  });
+
+  const nextMatchUpdateData = {};
+
+  if (nextMatch) {
+    if (nextMatch.homeSourceMatchId === matchId) {
+      nextMatchUpdateData.homeTeamId = winnerTeamId;
+    }
+    if (nextMatch.awaySourceMatchId === matchId) {
+      nextMatchUpdateData.awayTeamId = winnerTeamId;
+    }
+  } else if (existingMatch && existingMatch.bracketPosition != null && existingMatch.roundName) {
+    // 2. Fallback: match by round name progression and bracket position
+    const roundProgression = {
+      'round of 64': 'Round of 32',
+      'round of 32': 'Round of 16',
+      'round of 16': 'Quarter Final',
+      'quarter final': 'Semi Final',
+      'quarterfinal': 'Semi Final',
+      'quarter-final': 'Semi Final',
+      'semi final': 'Final',
+      'semifinal': 'Final',
+      'semi-final': 'Final',
+    };
+
+    const currentRoundKey = (existingMatch.roundName || '').toLowerCase().trim();
+    const nextRoundName = roundProgression[currentRoundKey];
+
+    if (nextRoundName) {
+      const nextBracketPosition = Math.ceil(existingMatch.bracketPosition / 2);
+      const isHome = existingMatch.bracketPosition % 2 === 1;
+
+      nextMatch = await tx.match.findFirst({
+        where: {
+          tournamentId,
+          bracketPosition: nextBracketPosition,
+          roundName: {
+            mode: 'insensitive',
+            equals: nextRoundName
+          }
+        }
+      });
+
+      if (nextMatch) {
+        if (isHome) {
+          nextMatchUpdateData.homeTeamId = winnerTeamId;
+          nextMatchUpdateData.homeSourceMatchId = matchId;
+        } else {
+          nextMatchUpdateData.awayTeamId = winnerTeamId;
+          nextMatchUpdateData.awaySourceMatchId = matchId;
+        }
+      }
+    }
+  }
+
+  if (nextMatch && Object.keys(nextMatchUpdateData).length > 0) {
+    return await tx.match.update({
+      where: { id: nextMatch.id },
+      data: nextMatchUpdateData,
+      include: {
+        homeTeam: {
+          select: { id: true, name: true, shortName: true, logoUrl: true }
+        },
+        awayTeam: {
+          select: { id: true, name: true, shortName: true, logoUrl: true }
+        }
+      }
+    });
+  }
+
+  return null;
+};
+
+/**
  * PUT /api/tournaments/:tournamentId/knockout/matches/:matchId/result
  * Updates the result of a knockout match, including score, tie-break method, and winner.
  */
@@ -529,13 +617,13 @@ export const updateKnockoutMatchResult = async (req, res) => {
       return res.status(403).json({ error: 'Only the tournament organizer or an admin can update knockout match results.' });
     }
 
-    // 2. Verify match exists, belongs to tournament, and is a knockout match
+    // 2. Verify match exists and belongs to tournament
     const existingMatch = await prisma.match.findUnique({
       where: { id: matchId }
     });
 
-    if (!existingMatch || existingMatch.tournamentId !== tournamentId || existingMatch.bracketPosition === null) {
-      return res.status(404).json({ error: 'Match not found in this tournament or is not a knockout match.' });
+    if (!existingMatch || existingMatch.tournamentId !== tournamentId) {
+      return res.status(404).json({ error: 'Match not found in this tournament.' });
     }
 
     // 3. Both teams must exist on the match
@@ -657,53 +745,8 @@ export const updateKnockoutMatchResult = async (req, res) => {
         });
       }
 
-      // 8. Find next knockout match where homeSourceMatchId or awaySourceMatchId is current match ID
-      const nextMatch = await tx.match.findFirst({
-        where: {
-          tournamentId,
-          OR: [
-            { homeSourceMatchId: matchId },
-            { awaySourceMatchId: matchId }
-          ]
-        }
-      });
-
-      let nextMatchAdvanced = null;
-
-      if (nextMatch) {
-        const nextMatchUpdateData = {};
-        if (nextMatch.homeSourceMatchId === matchId) {
-          nextMatchUpdateData.homeTeamId = finalWinnerTeamId;
-        }
-        if (nextMatch.awaySourceMatchId === matchId) {
-          nextMatchUpdateData.awayTeamId = finalWinnerTeamId;
-        }
-
-        if (Object.keys(nextMatchUpdateData).length > 0) {
-          nextMatchAdvanced = await tx.match.update({
-            where: { id: nextMatch.id },
-            data: nextMatchUpdateData,
-            include: {
-              homeTeam: {
-                select: {
-                  id: true,
-                  name: true,
-                  shortName: true,
-                  logoUrl: true
-                }
-              },
-              awayTeam: {
-                select: {
-                  id: true,
-                  name: true,
-                  shortName: true,
-                  logoUrl: true
-                }
-              }
-            }
-          });
-        }
-      }
+      // Advance winner to the next round match
+      const nextMatchAdvanced = await advanceKnockoutWinner(tx, tournamentId, matchId, finalWinnerTeamId, existingMatch);
 
       return { updatedMatch: match, advancedTo: nextMatchAdvanced };
     });

@@ -22,6 +22,14 @@ export const createTeam = async (req, res) => {
       return res.status(404).json({ error: 'Selected tournament not found.' });
     }
 
+    // Check if tournament is full
+    const currentTeamCount = await prisma.team.count({
+      where: { tournamentId }
+    });
+    if (tournamentExists.maxTeams !== null && currentTeamCount >= tournamentExists.maxTeams) {
+      return res.status(400).json({ error: 'Tournament is full. No more teams can be registered.' });
+    }
+
     // Check duplicate team name within the same tournament
     const existingTeam = await prisma.team.findFirst({
       where: {
@@ -138,6 +146,25 @@ export const updateTeam = async (req, res) => {
 
     if (updateData.shortName && updateData.shortName.trim().length > 5) {
       return res.status(400).json({ error: 'Short name must be 5 characters or fewer.' });
+    }
+
+    // If tournament is being changed, check capacity of the target tournament
+    const isTournamentChanging = updateData.tournamentId && updateData.tournamentId !== team.tournamentId;
+    if (isTournamentChanging) {
+      const targetTournament = await prisma.tournament.findUnique({
+        where: { id: targetTournamentId }
+      });
+      if (!targetTournament) {
+        return res.status(404).json({ error: 'Target tournament not found.' });
+      }
+      if (targetTournament.maxTeams !== null) {
+        const countInTarget = await prisma.team.count({
+          where: { tournamentId: targetTournamentId }
+        });
+        if (countInTarget >= targetTournament.maxTeams) {
+          return res.status(400).json({ error: 'Tournament is full. No more teams can be registered.' });
+        }
+      }
     }
 
     if (targetTournamentId && targetName) {
