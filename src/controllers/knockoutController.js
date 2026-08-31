@@ -249,9 +249,12 @@ export const generateHybridKnockoutBracket = async (req, res) => {
       return res.status(404).json({ error: 'Tournament not found.' });
     }
 
-    // 2. Validate format = hybrid
-    if (tournament.format !== 'hybrid') {
-      return res.status(400).json({ error: 'Tournament format must be hybrid.' });
+    // 2. Validate format supports group-then-knockout progression
+    const groupKnockoutFormats = ['hybrid', 'group_stage', 'group_knockout'];
+    if (!groupKnockoutFormats.includes(tournament.format)) {
+      return res.status(400).json({
+        error: `Tournament format must be one of: ${groupKnockoutFormats.join(', ')}. Got: "${tournament.format}".`
+      });
     }
 
     if (req.user) {
@@ -292,6 +295,31 @@ export const generateHybridKnockoutBracket = async (req, res) => {
     const missingGroup = teams.some(t => !t.groupName || t.groupName.trim() === '');
     if (missingGroup) {
       return res.status(400).json({ error: 'All registered teams must be assigned to a group (groupName).' });
+    }
+
+    // 4b. Validate group stage is complete: all non-bracket (group phase) matches must be fulltime
+    const groupPhaseMatches = await prisma.match.findMany({
+      where: {
+        tournamentId,
+        bracketPosition: null  // group-phase matches have no bracketPosition
+      },
+      select: { id: true, status: true, roundName: true }
+    });
+
+    if (groupPhaseMatches.length === 0) {
+      return res.status(400).json({
+        error: 'No group-stage fixtures found. Generate and complete all group fixtures before generating the knockout bracket.'
+      });
+    }
+
+    const incompleteGroupMatches = groupPhaseMatches.filter(
+      m => m.status !== 'fulltime' && m.status !== 'completed'
+    );
+
+    if (incompleteGroupMatches.length > 0) {
+      return res.status(400).json({
+        error: `Group stage is not complete. ${incompleteGroupMatches.length} match(es) have not yet reached Full Time. Complete all group fixtures before generating the knockout bracket.`
+      });
     }
 
     // 5. Configurable number of qualifying teams per group
