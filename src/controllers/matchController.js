@@ -251,17 +251,42 @@ export const updateMatchStatus = async (req, res) => {
       }
     });
 
-    if ((updatedMatch.status === 'fulltime' || updatedMatch.status === 'completed') && updatedMatch.winnerTeamId && updatedMatch.tournamentId) {
-      try {
-        await advanceKnockoutWinner(prisma, updatedMatch.tournamentId, id, updatedMatch.winnerTeamId, match);
-        if (match.roundName === 'Final') {
-          await prisma.tournament.update({
-            where: { id: updatedMatch.tournamentId },
-            data: { status: 'completed' }
-          });
+    if ((updatedMatch.status === 'fulltime' || updatedMatch.status === 'completed') && updatedMatch.tournamentId) {
+      const isLeague = updatedMatch.tournament?.format === 'league';
+
+      // Knockout logic
+      if (!isLeague && updatedMatch.winnerTeamId) {
+        try {
+          await advanceKnockoutWinner(prisma, updatedMatch.tournamentId, id, updatedMatch.winnerTeamId, match);
+          if (match.roundName === 'Final') {
+            await prisma.tournament.update({
+              where: { id: updatedMatch.tournamentId },
+              data: { status: 'completed' }
+            });
+          }
+        } catch (advErr) {
+          console.warn('Knockout auto-advancement note:', advErr);
         }
-      } catch (advErr) {
-        console.warn('Knockout auto-advancement note:', advErr);
+      }
+
+      // League logic
+      if (isLeague) {
+        try {
+          const tMatches = await prisma.match.findMany({
+            where: { tournamentId: updatedMatch.tournamentId }
+          });
+          const allFinished = tMatches.length > 0 && tMatches.every(
+            m => m.status === 'fulltime' || m.status === 'completed'
+          );
+          if (allFinished) {
+            await prisma.tournament.update({
+              where: { id: updatedMatch.tournamentId },
+              data: { status: 'completed' }
+            });
+          }
+        } catch (err) {
+          console.error('Error checking league completion:', err);
+        }
       }
     }
 
