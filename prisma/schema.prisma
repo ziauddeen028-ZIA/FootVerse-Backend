@@ -27,7 +27,8 @@ model Profile {
   playerStats          PlayerStats[]
   teamMemberships      TeamMember[]
   managedTeams         Team[]
-  organizedTournaments Tournament[]
+  organizedTournaments Tournament[]     @relation("TournamentOrganizer")
+  bestPlayerTournaments Tournament[]   @relation("TournamentBestPlayer")
 
   @@map("profiles")
   @@schema("public")
@@ -36,6 +37,7 @@ model Profile {
 model Tournament {
   id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   organizerId          String?           @map("organizer_id") @db.Uuid
+  bestPlayerId         String?           @map("best_player_id") @db.Uuid
   name                 String
   slug                 String            @unique
   description          String?
@@ -56,7 +58,8 @@ model Tournament {
   matches              Match[]
   playerStats          PlayerStats[]
   teams                Team[]
-  organizer            Profile?          @relation(fields: [organizerId], references: [id], onUpdate: NoAction)
+  organizer            Profile?          @relation("TournamentOrganizer", fields: [organizerId], references: [id], onUpdate: NoAction)
+  bestPlayer           Profile?          @relation("TournamentBestPlayer", fields: [bestPlayerId], references: [id], onUpdate: NoAction)
 
   @@map("tournaments")
   @@schema("public")
