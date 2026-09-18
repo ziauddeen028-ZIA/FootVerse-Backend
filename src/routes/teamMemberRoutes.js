@@ -10,13 +10,13 @@ import { requireAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Apply requireAuth middleware to all routes in this module
-router.use(requireAuth);
-
+// Public Routes (Anyone can view team rosters and players)
 router.get('/', getAllTeamMembers);
-router.post('/', addTeamMember);
 router.get('/team/:teamId', getTeamMembersByTeam);
-router.put('/:id', updateTeamMember);
-router.delete('/:id', removeTeamMember);
+
+// Protected Routes (Must be authenticated to manage squad members)
+router.post('/', requireAuth, addTeamMember);
+router.put('/:id', requireAuth, updateTeamMember);
+router.delete('/:id', requireAuth, removeTeamMember);
 
 export default router;
