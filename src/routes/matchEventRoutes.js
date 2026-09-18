@@ -9,10 +9,13 @@ import { requireAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
+// Public Routes (Anyone can view events for a match)
+router.get('/match/:matchId', getMatchEventsByMatch);
+
+// Protected Routes (Must be logged in to modify events)
 router.use(requireAuth);
 
 router.post('/', createMatchEvent);
-router.get('/match/:matchId', getMatchEventsByMatch);
 router.put('/:id', updateMatchEvent);
 router.delete('/:id', deleteMatchEvent);
 
