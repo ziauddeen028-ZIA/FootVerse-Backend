@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma.js';
+import { createNotification } from './notificationController.js';
 
 // CREATE a new tournament
 export const createTournament = async (req, res) => {
@@ -42,6 +43,15 @@ export const createTournament = async (req, res) => {
         entryFee: parsedEntryFee,
         organizerId: organizerId
       }
+    });
+
+    // Notify the organizer that their tournament was created
+    await createNotification({
+      userId: organizerId,
+      title: 'Tournament Created!',
+      message: `Your tournament "${newTournament.name}" has been created successfully. Registration is now open.`,
+      type: 'success',
+      link: `/tournaments/${newTournament.id}`
     });
 
     res.status(201).json({ message: 'Tournament created!', tournament: newTournament });

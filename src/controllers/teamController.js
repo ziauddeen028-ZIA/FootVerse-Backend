@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma.js';
+import { createNotification } from './notificationController.js';
 
 // CREATE a new team
 export const createTeam = async (req, res) => {
@@ -62,6 +63,15 @@ export const createTeam = async (req, res) => {
           }
         }
       }
+    });
+
+    // Notify the manager that their team was registered
+    await createNotification({
+      userId: managerId,
+      title: 'Team Registered!',
+      message: `Your team "${newTeam.name}" has been registered for "${newTeam.tournament?.name || 'a tournament'}" successfully.`,
+      type: 'success',
+      link: `/teams/${newTeam.id}`
     });
 
     res.status(201).json({ message: 'Team created!', team: newTeam });
