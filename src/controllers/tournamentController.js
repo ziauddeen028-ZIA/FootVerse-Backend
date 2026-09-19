@@ -51,7 +51,7 @@ export const createTournament = async (req, res) => {
       title: 'Tournament Created!',
       message: `Your tournament "${newTournament.name}" has been created successfully. Registration is now open.`,
       type: 'success',
-      link: `/tournaments/${newTournament.id}`
+      link: `/tournaments/${newTournament.slug || newTournament.id}`
     });
 
     res.status(201).json({ message: 'Tournament created!', tournament: newTournament });
@@ -90,13 +90,17 @@ export const getAllTournaments = async (req, res) => {
   }
 };
 
-// READ a single tournament by slug (Public)
+// READ a single tournament by slug or ID (Public)
 export const getTournamentBySlug = async (req, res) => {
   try {
     const { slug } = req.params;
 
-    const rawTournament = await prisma.tournament.findUnique({
-      where: { slug },
+    const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(slug);
+
+    const rawTournament = await prisma.tournament.findFirst({
+      where: isUuid
+        ? { OR: [{ id: slug }, { slug }] }
+        : { slug },
       include: {
         organizer: {
           select: {

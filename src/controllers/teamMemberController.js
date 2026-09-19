@@ -160,6 +160,16 @@ export const addTeamMember = async (req, res) => {
       return res.status(400).json({ error: 'This player is already a member of this team.' });
     }
 
+    // Enforce only ONE captain per team
+    if (Boolean(isCaptain)) {
+      const existingCaptain = await prisma.teamMember.findFirst({
+        where: { teamId, isCaptain: true }
+      });
+      if (existingCaptain) {
+        return res.status(400).json({ error: 'This team already has a captain. Only one captain per team is allowed.' });
+      }
+    }
+
     // Create TeamMember link
     const newMember = await prisma.teamMember.create({
       data: {
@@ -219,6 +229,7 @@ export const updateTeamMember = async (req, res) => {
 
     const targetTeamId = teamId || existingMember.teamId;
     const targetJersey = jerseyNumber !== undefined ? Number(jerseyNumber) : existingMember.jerseyNumber;
+    const targetIsCaptain = isCaptain !== undefined ? Boolean(isCaptain) : Boolean(existingMember.isCaptain);
 
     if (!Number.isInteger(targetJersey) || targetJersey < 1 || targetJersey > 99) {
       return res.status(400).json({ error: 'Jersey number must be an integer between 1 and 99.' });
@@ -235,6 +246,20 @@ export const updateTeamMember = async (req, res) => {
 
     if (duplicateJersey) {
       return res.status(400).json({ error: `Jersey #${targetJersey} is already taken in this team.` });
+    }
+
+    // Enforce only ONE captain per team
+    if (targetIsCaptain) {
+      const existingCaptain = await prisma.teamMember.findFirst({
+        where: {
+          teamId: targetTeamId,
+          isCaptain: true,
+          NOT: { id }
+        }
+      });
+      if (existingCaptain) {
+        return res.status(400).json({ error: 'This team already has a captain. Only one captain per team is allowed.' });
+      }
     }
 
     // Update Profile details if player exists and updates are provided
@@ -257,7 +282,7 @@ export const updateTeamMember = async (req, res) => {
         teamId: targetTeamId,
         jerseyNumber: targetJersey,
         position: position || existingMember.position,
-        isCaptain: isCaptain !== undefined ? Boolean(isCaptain) : existingMember.isCaptain
+        isCaptain: targetIsCaptain
       },
       include: {
         player: true,

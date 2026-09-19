@@ -7,47 +7,73 @@ export const createTeam = async (req, res) => {
     const managerId = req.user.id;
     const { name, shortName, tournamentId, logoUrl, primaryColor, secondaryColor, city, homeGround } = req.body;
 
-    if (!name || !shortName || !tournamentId) {
-      return res.status(400).json({ error: 'Team name, short name, and tournament are required.' });
+    if (!name || !shortName) {
+      return res.status(400).json({ error: 'Team name and short name are required.' });
     }
 
     if (shortName.trim().length > 5) {
       return res.status(400).json({ error: 'Short name must be 5 characters or fewer.' });
     }
 
-    // Verify tournament exists
-    const tournamentExists = await prisma.tournament.findUnique({
-      where: { id: tournamentId }
-    });
-    if (!tournamentExists) {
-      return res.status(404).json({ error: 'Selected tournament not found.' });
+    // Check user role from profile or metadata
+    const userProfile = await prisma.profile.findUnique({ where: { id: managerId } });
+    const userRole = userProfile?.role || req.user.user_metadata?.role || 'player';
+    const isOrganizerOrAdmin = userRole === 'organizer' || userRole === 'admin';
+
+    // Organizer/Admin must select a tournament
+    if (isOrganizerOrAdmin && !tournamentId) {
+      return res.status(400).json({ error: 'Tournament selection is required when creating a team as an organizer or admin.' });
     }
 
-    // Check if tournament is full
-    const currentTeamCount = await prisma.team.count({
-      where: { tournamentId }
-    });
-    if (tournamentExists.maxTeams !== null && currentTeamCount >= tournamentExists.maxTeams) {
-      return res.status(400).json({ error: 'Tournament is full. No more teams can be registered.' });
-    }
+    const targetTournamentId = tournamentId || null;
 
-    // Check duplicate team name within the same tournament
-    const existingTeam = await prisma.team.findFirst({
-      where: {
-        tournamentId,
-        name: { equals: name.trim(), mode: 'insensitive' }
+    if (targetTournamentId) {
+      // Verify tournament exists
+      const tournamentExists = await prisma.tournament.findUnique({
+        where: { id: targetTournamentId }
+      });
+      if (!tournamentExists) {
+        return res.status(404).json({ error: 'Selected tournament not found.' });
       }
-    });
 
-    if (existingTeam) {
-      return res.status(400).json({ error: 'A team with this name already exists in the selected tournament.' });
+      // Check if tournament is full
+      const currentTeamCount = await prisma.team.count({
+        where: { tournamentId: targetTournamentId }
+      });
+      if (tournamentExists.maxTeams !== null && currentTeamCount >= tournamentExists.maxTeams) {
+        return res.status(400).json({ error: 'Tournament is full. No more teams can be registered.' });
+      }
+
+      // Check duplicate team name within the same tournament
+      const existingTeam = await prisma.team.findFirst({
+        where: {
+          tournamentId: targetTournamentId,
+          name: { equals: name.trim(), mode: 'insensitive' }
+        }
+      });
+
+      if (existingTeam) {
+        return res.status(400).json({ error: 'A team with this name already exists in the selected tournament.' });
+      }
+    } else {
+      // Check duplicate team name for the same manager when not assigned to a tournament
+      const existingTeam = await prisma.team.findFirst({
+        where: {
+          managerId,
+          name: { equals: name.trim(), mode: 'insensitive' }
+        }
+      });
+
+      if (existingTeam) {
+        return res.status(400).json({ error: 'You already have a team with this name.' });
+      }
     }
 
     const newTeam = await prisma.team.create({
       data: {
         name: name.trim(),
         shortName: shortName.trim().toUpperCase(),
-        tournamentId,
+        tournamentId: targetTournamentId,
         logoUrl: logoUrl || null,
         primaryColor: primaryColor || '#1E50FF',
         secondaryColor: secondaryColor || '#FFFFFF',
@@ -65,11 +91,30 @@ export const createTeam = async (req, res) => {
       }
     });
 
-    // Notify the manager that their team was registered
+    // Automatically make creator the team's Captain in team_members if not already added
+    const existingCaptainMember = await prisma.teamMember.findFirst({
+      where: { teamId: newTeam.id, playerId: managerId }
+    });
+
+    if (!existingCaptainMember) {
+      await prisma.teamMember.create({
+        data: {
+          teamId: newTeam.id,
+          playerId: managerId,
+          jerseyNumber: 10,
+          position: userProfile?.preferredPosition || 'Captain',
+          isCaptain: true
+        }
+      });
+    }
+
+    // Notify the manager/captain that their team was created
     await createNotification({
       userId: managerId,
-      title: 'Team Registered!',
-      message: `Your team "${newTeam.name}" has been registered for "${newTeam.tournament?.name || 'a tournament'}" successfully.`,
+      title: 'Team Created!',
+      message: newTeam.tournament?.name
+        ? `Your team "${newTeam.name}" has been registered for "${newTeam.tournament.name}" successfully.`
+        : `Your team "${newTeam.name}" has been created successfully.`,
       type: 'success',
       link: `/teams/${newTeam.id}`
     });
@@ -90,6 +135,12 @@ export const getAllTeams = async (req, res) => {
           select: {
             id: true,
             name: true
+          }
+        },
+        members: {
+          select: {
+            playerId: true,
+            isCaptain: true
           }
         }
       },

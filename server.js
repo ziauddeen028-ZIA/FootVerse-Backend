@@ -16,6 +16,8 @@ import standingsRoutes from './src/routes/standingsRoutes.js';
 import knockoutRoutes from './src/routes/knockoutRoutes.js';
 import leagueRoutes from './src/routes/leagueRoutes.js';
 import notificationRoutes from './src/routes/notificationRoutes.js';
+import teamJoinRequestRoutes from './src/routes/teamJoinRequestRoutes.js';
+import tournamentJoinRequestRoutes from './src/routes/tournamentJoinRequestRoutes.js';
 
 dotenv.config();
 
@@ -46,6 +48,8 @@ app.use('/api/tournaments', standingsRoutes);
 app.use('/api/tournaments', knockoutRoutes);
 app.use('/api/tournaments', leagueRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/team-join-requests', teamJoinRequestRoutes);
+app.use('/api/tournament-join-requests', tournamentJoinRequestRoutes);
 
 // Health Check API Endpoint
 app.get('/api/health', (req, res) => {
