@@ -1469,6 +1469,26 @@ export const getTeamStats = async (req, res) => {
 
     const tournamentHistory = Object.values(tournamentHistoryMap);
 
+    // Public Squad (accessible to guests and all users)
+    const squad = (team.members || []).map(member => {
+      const p = member.player;
+      if (!p) return null;
+      return {
+        id: p.id,
+        fullName: p.fullName || 'Player',
+        avatarUrl: p.avatarUrl || null,
+        position: member.position || p.preferredPosition || 'Player',
+        jerseyNumber: member.jerseyNumber ?? p.jerseyNumber ?? null,
+        isCaptain: member.isCaptain || false
+      };
+    }).filter(Boolean);
+
+    squad.sort((a, b) => {
+      if (a.isCaptain && !b.isCaptain) return -1;
+      if (!a.isCaptain && b.isCaptain) return 1;
+      return (a.fullName || '').localeCompare(b.fullName || '');
+    });
+
     let detailedPerformance = null;
     if (isAuthorizedMember) {
       const roster = team.members.map(member => {
@@ -1519,6 +1539,7 @@ export const getTeamStats = async (req, res) => {
       overallPerformance: { matchesPlayed: allMatches.length, wins, draws, losses, goalsFor, goalsAgainst, cleanSheets, tournamentsCount: tournamentHistory.length },
       tournamentHistory,
       matchHistory,
+      squad,
       detailedPerformance
     });
   } catch (err) {
