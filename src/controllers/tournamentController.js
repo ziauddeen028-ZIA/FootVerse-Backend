@@ -1,5 +1,24 @@
 import prisma from '../lib/prisma.js';
 import { createNotification } from './notificationController.js';
+import crypto from 'crypto';
+
+// ─── Helper: generate a unique 8-char uppercase alphanumeric tournament code ──
+function generateTournamentCode() {
+  // 6 random bytes → 12 hex chars → take first 8 and uppercase
+  return crypto.randomBytes(6).toString('hex').toUpperCase().slice(0, 8);
+}
+
+async function uniqueTournamentCode() {
+  let attempts = 0;
+  while (attempts < 10) {
+    const code = generateTournamentCode();
+    const existing = await prisma.tournament.findUnique({ where: { tournamentCode: code } });
+    if (!existing) return code;
+    attempts++;
+  }
+  // Fallback: extremely unlikely, but safe
+  return generateTournamentCode() + Date.now().toString(36).toUpperCase().slice(-4);
+}
 
 // CREATE a new tournament
 export const createTournament = async (req, res) => {
@@ -30,6 +49,9 @@ export const createTournament = async (req, res) => {
       return res.status(400).json({ error: 'entryFee must be a valid non-negative number.' });
     }
 
+    // Generate a unique tournament code for the organizer to share
+    const tournamentCode = await uniqueTournamentCode();
+
     const newTournament = await prisma.tournament.create({
       data: {
         name,
@@ -41,7 +63,8 @@ export const createTournament = async (req, res) => {
         endDate: endDate ? new Date(endDate) : null,
         maxTeams: parsedMaxTeams,
         entryFee: parsedEntryFee,
-        organizerId: organizerId
+        organizerId,
+        tournamentCode
       }
     });
 
@@ -49,7 +72,7 @@ export const createTournament = async (req, res) => {
     await createNotification({
       userId: organizerId,
       title: 'Tournament Created!',
-      message: `Your tournament "${newTournament.name}" has been created successfully. Registration is now open.`,
+      message: `Your tournament "${newTournament.name}" has been created. Share the join code "${tournamentCode}" with team captains/managers.`,
       type: 'success',
       link: `/tournaments/${newTournament.slug || newTournament.id}`
     });
@@ -61,9 +84,16 @@ export const createTournament = async (req, res) => {
   }
 };
 
-// READ all tournaments (Public)
+// READ all tournaments
+// tournamentCode is stripped from the response unless the caller is the organizer or admin.
 export const getAllTournaments = async (req, res) => {
   try {
+    const callerId = req.user?.id ?? null;
+    const callerProfile = callerId
+      ? await prisma.profile.findUnique({ where: { id: callerId }, select: { role: true } })
+      : null;
+    const isAdmin = callerProfile?.role === 'admin';
+
     const rawTournaments = await prisma.tournament.findMany({
       include: {
         _count: {
@@ -76,10 +106,13 @@ export const getAllTournaments = async (req, res) => {
     });
 
     const tournaments = rawTournaments.map(t => {
-      const { _count, ...rest } = t;
+      const { _count, tournamentCode, ...rest } = t;
+      const isOrganizer = callerId && t.organizerId === callerId;
       return {
         ...rest,
-        registeredTeamsCount: _count?.teams ?? 0
+        registeredTeamsCount: _count?.teams ?? 0,
+        // Only expose the code to the organizer of this tournament or an admin
+        ...(isOrganizer || isAdmin ? { tournamentCode } : {})
       };
     });
 
@@ -94,6 +127,11 @@ export const getAllTournaments = async (req, res) => {
 export const getTournamentBySlug = async (req, res) => {
   try {
     const { slug } = req.params;
+    const callerId = req.user?.id ?? null;
+    const callerProfile = callerId
+      ? await prisma.profile.findUnique({ where: { id: callerId }, select: { role: true } })
+      : null;
+    const isAdmin = callerProfile?.role === 'admin';
 
     const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(slug);
 
@@ -118,10 +156,14 @@ export const getTournamentBySlug = async (req, res) => {
 
     if (!rawTournament) return res.status(404).json({ error: 'Tournament not found.' });
 
-    const { _count, ...rest } = rawTournament;
+    const { _count, tournamentCode, ...rest } = rawTournament;
+    const isOrganizer = callerId && rawTournament.organizerId === callerId;
+
     const tournament = {
       ...rest,
-      registeredTeamsCount: _count?.teams ?? 0
+      registeredTeamsCount: _count?.teams ?? 0,
+      // Only expose code to organizer or admin
+      ...(isOrganizer || isAdmin ? { tournamentCode } : {})
     };
 
     res.status(200).json({ tournament });

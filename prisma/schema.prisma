@@ -41,6 +41,7 @@ model Tournament {
   bestPlayerId         String?           @map("best_player_id") @db.Uuid
   name                 String
   slug                 String            @unique
+  tournamentCode       String?           @unique @map("tournament_code") @db.VarChar(12)
   description          String?
   bannerUrl            String?           @map("banner_url")
   logoUrl              String?           @map("logo_url")

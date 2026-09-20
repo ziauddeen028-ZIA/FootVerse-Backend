@@ -295,3 +295,147 @@ export const rejectJoinRequest = async (req, res) => {
     res.status(500).json({ error: 'Internal server error.' });
   }
 };
+
+// ─── POST /api/tournament-join-requests/join-by-code ───────────────────────
+// Captain/Manager directly registers a team using the organizer-issued code.
+// Validation: valid code → caller is manager or captain → not already registered
+//             → no existing pending/approved request → capacity available.
+// On success: team.tournamentId is set immediately (no approval needed) and
+//             a TournamentJoinRequest row with status 'code_join' is created
+//             for audit purposes.
+export const joinByCode = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { code, teamId } = req.body;
+
+    if (!code || !teamId) {
+      return res.status(400).json({ error: 'Tournament code and team ID are required.' });
+    }
+
+    // ── 1. Resolve caller's profile role ──────────────────────────────────
+    const callerProfile = await prisma.profile.findUnique({
+      where: { id: userId },
+      select: { role: true }
+    });
+
+    const callerRole = callerProfile?.role;
+
+    // Plain players (and guests) cannot use the code-join path at all
+    if (!callerRole || callerRole === 'guest' || callerRole === 'player') {
+      return res.status(403).json({
+        error: 'Forbidden: Only a team manager or team captain can join via tournament code.'
+      });
+    }
+
+    // ── 2. Look up tournament by code ─────────────────────────────────────
+    const normalizedCode = String(code).trim().toUpperCase();
+    const tournament = await prisma.tournament.findUnique({
+      where: { tournamentCode: normalizedCode }
+    });
+
+    if (!tournament) {
+      return res.status(404).json({ error: 'Invalid tournament code. Please check and try again.' });
+    }
+
+    // ── 3. Verify the team exists ─────────────────────────────────────────
+    const team = await prisma.team.findUnique({
+      where: { id: teamId },
+      include: { manager: true }
+    });
+
+    if (!team) {
+      return res.status(404).json({ error: 'Team not found.' });
+    }
+
+    // ── 4. Verify caller is manager or captain of this team ───────────────
+    const isCaptainMember = await prisma.teamMember.findFirst({
+      where: { teamId, playerId: userId, isCaptain: true }
+    });
+
+    const isTeamManager = team.managerId === userId;
+
+    if (!isTeamManager && !isCaptainMember && callerRole !== 'admin') {
+      return res.status(403).json({
+        error: 'Forbidden: You must be the team manager or team captain to join on behalf of this team.'
+      });
+    }
+
+    // ── 5. Check team is not already registered for this tournament ───────
+    if (team.tournamentId === tournament.id) {
+      return res.status(400).json({ error: 'This team is already registered for this tournament.' });
+    }
+
+    // ── 6. Check for an existing pending or approved request ──────────────
+    const existingRequest = await prisma.tournamentJoinRequest.findFirst({
+      where: {
+        tournamentId: tournament.id,
+        teamId,
+        status: { in: ['pending', 'approved', 'code_join'] }
+      }
+    });
+
+    if (existingRequest) {
+      return res.status(400).json({
+        error: `This team already has an active or approved join request for "${tournament.name}".`
+      });
+    }
+
+    // ── 7. Check tournament capacity ──────────────────────────────────────
+    const registeredCount = await prisma.team.count({
+      where: { tournamentId: tournament.id }
+    });
+
+    if (tournament.maxTeams !== null && registeredCount >= tournament.maxTeams) {
+      return res.status(400).json({
+        error: `"${tournament.name}" is full. No more teams can be registered.`
+      });
+    }
+
+    // ── 8. Register the team immediately (set team.tournamentId) ──────────
+    await prisma.team.update({
+      where: { id: teamId },
+      data: { tournamentId: tournament.id }
+    });
+
+    // ── 9. Create an audit record ─────────────────────────────────────────
+    const auditRecord = await prisma.tournamentJoinRequest.create({
+      data: {
+        tournamentId: tournament.id,
+        teamId,
+        status: 'code_join'
+      },
+      include: { tournament: true, team: true }
+    });
+
+    // ── 10. Notify organizer ──────────────────────────────────────────────
+    if (tournament.organizerId && tournament.organizerId !== userId) {
+      await createNotification({
+        userId: tournament.organizerId,
+        title: 'Team Joined via Code',
+        message: `"${team.name}" joined "${tournament.name}" using the tournament invite code.`,
+        type: 'info',
+        link: `/organizer/tournaments`
+      });
+    }
+
+    // ── 11. Notify the team manager (if different from the caller) ─────────
+    if (team.managerId && team.managerId !== userId) {
+      await createNotification({
+        userId: team.managerId,
+        title: 'Team Registered for Tournament',
+        message: `Your team "${team.name}" was registered for "${tournament.name}" using the tournament invite code.`,
+        type: 'success',
+        link: `/tournaments/${tournament.id}`
+      });
+    }
+
+    res.status(200).json({
+      message: `"${team.name}" has been successfully registered for "${tournament.name}"!`,
+      joinRequest: auditRecord
+    });
+  } catch (err) {
+    console.error('Error joining tournament by code:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
