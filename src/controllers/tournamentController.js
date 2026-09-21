@@ -20,6 +20,42 @@ async function uniqueTournamentCode() {
   return generateTournamentCode() + Date.now().toString(36).toUpperCase().slice(-4);
 }
 
+// ─── Helper to parse embedded tournament config ──
+function parseTournamentConfig(description) {
+  let fieldSize = 11;
+  let substitutionMode = 'normal';
+  let cleanDescription = description || '';
+
+  if (description) {
+    const match = description.match(/<!--config:(.*?)-->/);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (parsed.fieldSize) fieldSize = Number(parsed.fieldSize);
+        if (parsed.substitutionMode) substitutionMode = parsed.substitutionMode;
+        cleanDescription = description.replace(/<!--config:.*?-->/g, '').trim();
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
+  return {
+    fieldSize: (!isNaN(fieldSize) && fieldSize > 0) ? fieldSize : 11,
+    substitutionMode: substitutionMode === 'rolling' ? 'rolling' : 'normal',
+    cleanDescription
+  };
+}
+
+function buildTournamentDescription(description, fieldSize, substitutionMode) {
+  const cleanDesc = (description || '').replace(/<!--config:.*?-->/g, '').trim();
+  const config = {
+    fieldSize: (!isNaN(Number(fieldSize)) && Number(fieldSize) > 0) ? Number(fieldSize) : 11,
+    substitutionMode: substitutionMode === 'rolling' ? 'rolling' : 'normal'
+  };
+  return `${cleanDesc} <!--config:${JSON.stringify(config)}-->`.trim();
+}
+
 // CREATE a new tournament
 export const createTournament = async (req, res) => {
   try {
@@ -31,7 +67,7 @@ export const createTournament = async (req, res) => {
       return res.status(403).json({ error: 'Only organizers or admins can create tournaments.' });
     }
 
-    const { name, slug, description, format, location, startDate, endDate, maxTeams, entryFee } = req.body;
+    const { name, slug, description, format, location, startDate, endDate, maxTeams, entryFee, fieldSize, substitutionMode } = req.body;
 
     if (!name || !slug || !location) {
       return res.status(400).json({ error: 'Name, slug, and location are required.' });
@@ -49,6 +85,9 @@ export const createTournament = async (req, res) => {
       return res.status(400).json({ error: 'entryFee must be a valid non-negative number.' });
     }
 
+    // Embed fieldSize and substitutionMode into description
+    const finalDescription = buildTournamentDescription(description, fieldSize, substitutionMode);
+
     // Generate a unique tournament code for the organizer to share
     const tournamentCode = await uniqueTournamentCode();
 
@@ -56,7 +95,7 @@ export const createTournament = async (req, res) => {
       data: {
         name,
         slug,
-        description,
+        description: finalDescription,
         format,
         location,
         startDate: startDate ? new Date(startDate) : null,
@@ -68,6 +107,14 @@ export const createTournament = async (req, res) => {
       }
     });
 
+    // Parse config for response
+    const config = parseTournamentConfig(newTournament.description);
+    const tournamentResponse = {
+      ...newTournament,
+      fieldSize: config.fieldSize,
+      substitutionMode: config.substitutionMode,
+    };
+
     // Notify the organizer that their tournament was created
     await createNotification({
       userId: organizerId,
@@ -77,7 +124,7 @@ export const createTournament = async (req, res) => {
       link: `/tournaments/${newTournament.slug || newTournament.id}`
     });
 
-    res.status(201).json({ message: 'Tournament created!', tournament: newTournament });
+    res.status(201).json({ message: 'Tournament created!', tournament: tournamentResponse });
   } catch (err) {
     console.error('Error creating tournament:', err);
     res.status(500).json({ error: 'Internal server error.' });
@@ -108,8 +155,11 @@ export const getAllTournaments = async (req, res) => {
     const tournaments = rawTournaments.map(t => {
       const { _count, tournamentCode, ...rest } = t;
       const isOrganizer = callerId && t.organizerId === callerId;
+      const config = parseTournamentConfig(t.description);
       return {
         ...rest,
+        fieldSize: config.fieldSize,
+        substitutionMode: config.substitutionMode,
         registeredTeamsCount: _count?.teams ?? 0,
         // Only expose the code to the organizer of this tournament or an admin
         ...(isOrganizer || isAdmin ? { tournamentCode } : {})
@@ -158,9 +208,12 @@ export const getTournamentBySlug = async (req, res) => {
 
     const { _count, tournamentCode, ...rest } = rawTournament;
     const isOrganizer = callerId && rawTournament.organizerId === callerId;
+    const config = parseTournamentConfig(rawTournament.description);
 
     const tournament = {
       ...rest,
+      fieldSize: config.fieldSize,
+      substitutionMode: config.substitutionMode,
       registeredTeamsCount: _count?.teams ?? 0,
       // Only expose code to organizer or admin
       ...(isOrganizer || isAdmin ? { tournamentCode } : {})
@@ -200,12 +253,21 @@ export const updateTournament = async (req, res) => {
       return res.status(400).json({ error: 'entryFee must be a valid non-negative number.' });
     }
 
+    let finalDescription = updateData.description;
+    if (updateData.fieldSize !== undefined || updateData.substitutionMode !== undefined || updateData.description !== undefined) {
+      const existingConfig = parseTournamentConfig(tournament.description);
+      const targetFieldSize = updateData.fieldSize !== undefined ? updateData.fieldSize : existingConfig.fieldSize;
+      const targetSubMode = updateData.substitutionMode !== undefined ? updateData.substitutionMode : existingConfig.substitutionMode;
+      const targetDesc = updateData.description !== undefined ? updateData.description : existingConfig.cleanDescription;
+      finalDescription = buildTournamentDescription(targetDesc, targetFieldSize, targetSubMode);
+    }
+
     const updatedTournament = await prisma.tournament.update({
       where: { id },
       data: {
         name: updateData.name,
         slug: updateData.slug,
-        description: updateData.description,
+        description: finalDescription,
         format: updateData.format,
         location: updateData.location,
         startDate: updateData.startDate
@@ -219,7 +281,14 @@ export const updateTournament = async (req, res) => {
       }
     });
 
-    res.status(200).json({ message: 'Tournament updated!', tournament: updatedTournament });
+    const config = parseTournamentConfig(updatedTournament.description);
+    const tournamentResponse = {
+      ...updatedTournament,
+      fieldSize: config.fieldSize,
+      substitutionMode: config.substitutionMode,
+    };
+
+    res.status(200).json({ message: 'Tournament updated!', tournament: tournamentResponse });
   } catch (err) {
     console.error('Error updating tournament:', err);
     res.status(500).json({ error: 'Internal server error.' });
