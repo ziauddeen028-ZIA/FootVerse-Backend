@@ -58,6 +58,38 @@ export const getTeamMembersByTeam = async (req, res) => {
   }
 };
 
+// GET /api/team-members/player/:playerId - Get all team memberships for a specific player
+export const getTeamMembersByPlayer = async (req, res) => {
+  try {
+    const { playerId } = req.params;
+
+    const members = await prisma.teamMember.findMany({
+      where: { playerId },
+      include: {
+        team: {
+          include: {
+            tournament: {
+              select: { id: true, name: true }
+            },
+            manager: {
+              select: { id: true, fullName: true, email: true }
+            },
+            members: {
+              select: { playerId: true, isCaptain: true }
+            }
+          }
+        }
+      },
+      orderBy: { joinedAt: 'desc' }
+    });
+
+    res.status(200).json({ teamMembers: members });
+  } catch (err) {
+    console.error('Error fetching player team memberships:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
 // POST /api/team-members - Create/Add a player to a team
 export const addTeamMember = async (req, res) => {
   try {

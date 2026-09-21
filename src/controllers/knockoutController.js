@@ -188,13 +188,13 @@ export const generateKnockoutBracket = async (req, res) => {
     }
 
     // 3. Fetch registered teams
-    const teams = await prisma.team.findMany({
+    const registeredTeams = await prisma.team.findMany({
       where: { tournamentId },
       orderBy: { createdAt: 'asc' },
       select: { id: true, name: true, shortName: true, logoUrl: true }
     });
 
-    const teamCount = teams.length;
+    const teamCount = registeredTeams.length;
     const supportedCounts = [4, 8, 16, 32, 64];
 
     // 4. Validate team count
@@ -204,9 +204,58 @@ export const generateKnockoutBracket = async (req, res) => {
       });
     }
 
+    let orderedTeams = registeredTeams;
+    const { orderedTeamIds, matchups } = req.body || {};
+
+    // Check if manual pairings / custom order were provided
+    let customIds = [];
+    if (Array.isArray(orderedTeamIds) && orderedTeamIds.length > 0) {
+      customIds = orderedTeamIds;
+    } else if (Array.isArray(matchups) && matchups.length > 0) {
+      for (const m of matchups) {
+        if (!m.homeTeamId || !m.awayTeamId) {
+          return res.status(400).json({
+            error: 'Each matchup must have both a home team and an away team selected.'
+          });
+        }
+        if (m.homeTeamId === m.awayTeamId) {
+          return res.status(400).json({
+            error: 'A team cannot play against itself in a matchup.'
+          });
+        }
+        customIds.push(m.homeTeamId, m.awayTeamId);
+      }
+    }
+
+    if (customIds.length > 0) {
+      if (customIds.length !== teamCount) {
+        return res.status(400).json({
+          error: `Manual bracket requires all ${teamCount} teams to be assigned to matchups. Currently provided: ${customIds.length}.`
+        });
+      }
+
+      const uniqueIds = new Set(customIds);
+      if (uniqueIds.size !== teamCount) {
+        return res.status(400).json({
+          error: 'Duplicate teams detected in manual matchups. Each team must play in exactly one first-round match.'
+        });
+      }
+
+      const teamMap = new Map(registeredTeams.map(t => [t.id, t]));
+      for (const id of customIds) {
+        if (!teamMap.has(id)) {
+          return res.status(400).json({
+            error: `Team ID ${id} is not registered for this tournament.`
+          });
+        }
+      }
+
+      orderedTeams = customIds.map(id => teamMap.get(id));
+    }
+
     // 5. Execute atomic bracket creation inside a Prisma transaction
     const { roundSpecs, createdMatches } = await prisma.$transaction(async (tx) => {
-      return await createBracketMatches(tx, tournamentId, teams, tournament.startDate);
+      return await createBracketMatches(tx, tournamentId, orderedTeams, tournament.startDate);
     });
 
     // 6. Group generated matches by round

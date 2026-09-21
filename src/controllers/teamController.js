@@ -1,5 +1,19 @@
 import prisma from '../lib/prisma.js';
 import { createNotification } from './notificationController.js';
+import { randomBytes } from 'crypto';
+
+// ─── Team Code Generator ─────────────────────────────────────────────────────
+// Generates a unique 8-character uppercase hex code (e.g. "A3F9C21B")
+const generateTeamCode = async () => {
+  let code;
+  let isUnique = false;
+  while (!isUnique) {
+    code = randomBytes(4).toString('hex').toUpperCase();
+    const existing = await prisma.team.findUnique({ where: { teamCode: code } });
+    if (!existing) isUnique = true;
+  }
+  return code;
+};
 
 // CREATE a new team
 export const createTeam = async (req, res) => {
@@ -69,11 +83,14 @@ export const createTeam = async (req, res) => {
       }
     }
 
+    const teamCode = await generateTeamCode();
+
     const newTeam = await prisma.team.create({
       data: {
         name: name.trim(),
         shortName: shortName.trim().toUpperCase(),
         tournamentId: targetTournamentId,
+        teamCode,
         logoUrl: logoUrl || null,
         primaryColor: primaryColor || '#1E50FF',
         secondaryColor: secondaryColor || '#FFFFFF',
@@ -291,6 +308,46 @@ export const deleteTeam = async (req, res) => {
     res.status(200).json({ message: 'Team deleted successfully.' });
   } catch (err) {
     console.error('Error deleting team:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// GET /api/teams/:id/team-code — Manager/Captain/Admin only
+export const getTeamCode = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const team = await prisma.team.findUnique({
+      where: { id },
+      select: { id: true, name: true, teamCode: true, managerId: true }
+    });
+
+    if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+    // Check if user is manager, captain, or admin
+    const userProfile = await prisma.profile.findUnique({ where: { id: userId } });
+    const isAdmin = userProfile?.role === 'admin';
+    const isManager = team.managerId === userId;
+
+    const isCaptain = await prisma.teamMember.findFirst({
+      where: { teamId: id, playerId: userId, isCaptain: true }
+    });
+
+    if (!isManager && !isCaptain && !isAdmin) {
+      return res.status(403).json({ error: 'Only the team manager or captain can view the team code.' });
+    }
+
+    // Backfill: generate a code if the team somehow has none
+    let { teamCode } = team;
+    if (!teamCode) {
+      teamCode = await generateTeamCode();
+      await prisma.team.update({ where: { id }, data: { teamCode } });
+    }
+
+    res.status(200).json({ teamCode, teamName: team.name });
+  } catch (err) {
+    console.error('Error fetching team code:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 };

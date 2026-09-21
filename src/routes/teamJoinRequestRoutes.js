@@ -4,7 +4,8 @@ import {
   getRequestStatus,
   getManagerRequests,
   approveJoinRequest,
-  rejectJoinRequest
+  rejectJoinRequest,
+  joinByCode
 } from '../controllers/teamJoinRequestController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 
@@ -12,6 +13,9 @@ const router = express.Router();
 
 // All team join request routes require authentication
 router.use(requireAuth);
+
+// Join a team instantly using a team code (no approval needed)
+router.post('/join-by-code', joinByCode);
 
 // Create join request
 router.post('/', createJoinRequest);

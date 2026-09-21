@@ -235,6 +235,25 @@ export const approveJoinRequest = async (req, res) => {
     });
 
     if (!existingMember) {
+      // ─── Tournament-scoped membership check ─────────────────────────────────
+      // A player can only be in ONE team per tournament.
+      // Standalone teams (no tournamentId) have no such restriction.
+      if (request.team?.tournamentId) {
+        const conflictingMembership = await prisma.teamMember.findFirst({
+          where: {
+            playerId: request.playerId,
+            team: { tournamentId: request.team.tournamentId }
+          },
+          include: { team: { select: { name: true } } }
+        });
+
+        if (conflictingMembership) {
+          return res.status(409).json({
+            error: `Player is already a member of "${conflictingMembership.team?.name}" in this tournament. A player can only belong to one team per tournament.`
+          });
+        }
+      }
+
       // Find taken jersey numbers for this team
       const existingMembers = await prisma.teamMember.findMany({
         where: { teamId: request.teamId },
@@ -328,6 +347,114 @@ export const rejectJoinRequest = async (req, res) => {
     });
   } catch (err) {
     console.error('Error rejecting join request:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// ─── POST /api/team-join-requests/join-by-code ───────────────────────────────
+// Player joins a team instantly using its 8-char teamCode.
+// Does NOT create a join request — adds to TeamMember directly.
+// Enforces tournament-scoped membership: one team per tournament per player.
+export const joinByCode = async (req, res) => {
+  try {
+    const playerId = req.user.id;
+    const { teamCode } = req.body;
+
+    if (!teamCode || typeof teamCode !== 'string') {
+      return res.status(400).json({ error: 'Team code is required.' });
+    }
+
+    // Look up the team by code
+    const team = await prisma.team.findUnique({
+      where: { teamCode: teamCode.trim().toUpperCase() },
+      include: { tournament: { select: { id: true, name: true } } }
+    });
+
+    if (!team) {
+      return res.status(404).json({ error: 'Invalid team code. Please check the code and try again.' });
+    }
+
+    // Check if player is already a member of THIS team
+    const existingMember = await prisma.teamMember.findUnique({
+      where: { teamId_playerId: { teamId: team.id, playerId } }
+    });
+
+    if (existingMember) {
+      return res.status(400).json({ error: 'You are already a member of this team.' });
+    }
+
+    // ─── Tournament-scoped membership check ───────────────────────────────
+    // Only enforce if the target team belongs to a tournament.
+    if (team.tournamentId) {
+      const conflictingMembership = await prisma.teamMember.findFirst({
+        where: {
+          playerId,
+          team: { tournamentId: team.tournamentId }
+        },
+        include: { team: { select: { name: true } } }
+      });
+
+      if (conflictingMembership) {
+        return res.status(409).json({
+          error: `You already belong to "${conflictingMembership.team?.name}" in the tournament "${team.tournament?.name}". A player can only be in one team per tournament.`
+        });
+      }
+    }
+
+    // Assign jersey number — prefer player's preferred number, else next available
+    const existingMembers = await prisma.teamMember.findMany({
+      where: { teamId: team.id },
+      select: { jerseyNumber: true }
+    });
+    const takenJerseys = new Set(existingMembers.map(m => m.jerseyNumber));
+    const playerProfile = await prisma.profile.findUnique({ where: { id: playerId } });
+    let assignedJersey = playerProfile?.jerseyNumber;
+    if (!assignedJersey || takenJerseys.has(assignedJersey)) {
+      assignedJersey = 1;
+      while (takenJerseys.has(assignedJersey) && assignedJersey <= 99) {
+        assignedJersey++;
+      }
+    }
+
+    // Create TeamMember
+    const newMember = await prisma.teamMember.create({
+      data: {
+        teamId: team.id,
+        playerId,
+        jerseyNumber: assignedJersey,
+        position: playerProfile?.preferredPosition || 'Midfielder',
+        isCaptain: false
+      }
+    });
+
+    // Notify team manager/captain
+    if (team.managerId && team.managerId !== playerId) {
+      const playerName = playerProfile?.fullName || 'A player';
+      await createNotification({
+        userId: team.managerId,
+        title: 'New Player Joined via Team Code',
+        message: `${playerName} joined ${team.name} using the team code.`,
+        type: 'success',
+        link: `/teams/${team.id}`
+      });
+    }
+
+    // Also notify the player
+    await createNotification({
+      userId: playerId,
+      title: 'You Joined a Team!',
+      message: `You have successfully joined "${team.name}"${team.tournament?.name ? ` for "${team.tournament.name}"` : ''}.`,
+      type: 'success',
+      link: `/teams/${team.id}`
+    });
+
+    res.status(201).json({
+      message: `Successfully joined ${team.name}!`,
+      teamMember: newMember,
+      team: { id: team.id, name: team.name }
+    });
+  } catch (err) {
+    console.error('Error joining team by code:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 };

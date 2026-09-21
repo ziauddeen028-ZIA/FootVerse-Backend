@@ -312,22 +312,7 @@ export const joinByCode = async (req, res) => {
       return res.status(400).json({ error: 'Tournament code and team ID are required.' });
     }
 
-    // ── 1. Resolve caller's profile role ──────────────────────────────────
-    const callerProfile = await prisma.profile.findUnique({
-      where: { id: userId },
-      select: { role: true }
-    });
-
-    const callerRole = callerProfile?.role;
-
-    // Plain players (and guests) cannot use the code-join path at all
-    if (!callerRole || callerRole === 'guest' || callerRole === 'player') {
-      return res.status(403).json({
-        error: 'Forbidden: Only a team manager or team captain can join via tournament code.'
-      });
-    }
-
-    // ── 2. Look up tournament by code ─────────────────────────────────────
+    // ── 1. Look up tournament by code ─────────────────────────────────────
     const normalizedCode = String(code).trim().toUpperCase();
     const tournament = await prisma.tournament.findUnique({
       where: { tournamentCode: normalizedCode }
@@ -337,7 +322,7 @@ export const joinByCode = async (req, res) => {
       return res.status(404).json({ error: 'Invalid tournament code. Please check and try again.' });
     }
 
-    // ── 3. Verify the team exists ─────────────────────────────────────────
+    // ── 2. Verify the team exists ─────────────────────────────────────────
     const team = await prisma.team.findUnique({
       where: { id: teamId },
       include: { manager: true }
@@ -347,25 +332,30 @@ export const joinByCode = async (req, res) => {
       return res.status(404).json({ error: 'Team not found.' });
     }
 
-    // ── 4. Verify caller is manager or captain of this team ───────────────
+    // ── 3. Verify caller is manager, captain of this team, or admin ───────
+    const callerProfile = await prisma.profile.findUnique({
+      where: { id: userId },
+      select: { role: true }
+    });
+    const isAdmin = callerProfile?.role === 'admin' || req.user?.role === 'admin';
+    const isTeamManager = team.managerId === userId;
+
     const isCaptainMember = await prisma.teamMember.findFirst({
       where: { teamId, playerId: userId, isCaptain: true }
     });
 
-    const isTeamManager = team.managerId === userId;
-
-    if (!isTeamManager && !isCaptainMember && callerRole !== 'admin') {
+    if (!isTeamManager && !isCaptainMember && !isAdmin) {
       return res.status(403).json({
-        error: 'Forbidden: You must be the team manager or team captain to join on behalf of this team.'
+        error: 'Forbidden: Only a team manager or team captain can join via tournament code.'
       });
     }
 
-    // ── 5. Check team is not already registered for this tournament ───────
+    // ── 4. Check team is not already registered for this tournament ───────
     if (team.tournamentId === tournament.id) {
       return res.status(400).json({ error: 'This team is already registered for this tournament.' });
     }
 
-    // ── 6. Check for an existing pending or approved request ──────────────
+    // ── 5. Check for an existing pending or approved request ──────────────
     const existingRequest = await prisma.tournamentJoinRequest.findFirst({
       where: {
         tournamentId: tournament.id,
@@ -380,7 +370,7 @@ export const joinByCode = async (req, res) => {
       });
     }
 
-    // ── 7. Check tournament capacity ──────────────────────────────────────
+    // ── 6. Check tournament capacity ──────────────────────────────────────
     const registeredCount = await prisma.team.count({
       where: { tournamentId: tournament.id }
     });
@@ -391,13 +381,13 @@ export const joinByCode = async (req, res) => {
       });
     }
 
-    // ── 8. Register the team immediately (set team.tournamentId) ──────────
+    // ── 7. Register the team immediately (set team.tournamentId) ──────────
     await prisma.team.update({
       where: { id: teamId },
       data: { tournamentId: tournament.id }
     });
 
-    // ── 9. Create an audit record ─────────────────────────────────────────
+    // ── 8. Create an audit record ─────────────────────────────────────────
     const auditRecord = await prisma.tournamentJoinRequest.create({
       data: {
         tournamentId: tournament.id,
@@ -407,7 +397,7 @@ export const joinByCode = async (req, res) => {
       include: { tournament: true, team: true }
     });
 
-    // ── 10. Notify organizer ──────────────────────────────────────────────
+    // ── 9. Notify organizer ──────────────────────────────────────────────
     if (tournament.organizerId && tournament.organizerId !== userId) {
       await createNotification({
         userId: tournament.organizerId,
@@ -418,7 +408,7 @@ export const joinByCode = async (req, res) => {
       });
     }
 
-    // ── 11. Notify the team manager (if different from the caller) ─────────
+    // ── 10. Notify the team manager (if different from the caller) ─────────
     if (team.managerId && team.managerId !== userId) {
       await createNotification({
         userId: team.managerId,

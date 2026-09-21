@@ -4,7 +4,8 @@ import {
   getAllTeams, 
   getTeamById, 
   updateTeam, 
-  deleteTeam 
+  deleteTeam,
+  getTeamCode
 } from '../controllers/teamController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 
@@ -18,5 +19,8 @@ router.get('/:id', getTeamById);
 router.post('/', requireAuth, createTeam);
 router.put('/:id', requireAuth, updateTeam);
 router.delete('/:id', requireAuth, deleteTeam);
+
+// Team Code — Manager/Captain only
+router.get('/:id/team-code', requireAuth, getTeamCode);
 
 export default router;

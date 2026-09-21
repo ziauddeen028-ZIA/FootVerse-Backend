@@ -74,6 +74,7 @@ model Team {
   tournamentId   String?      @map("tournament_id") @db.Uuid
   name           String
   shortName      String       @map("short_name") @db.VarChar(5)
+  teamCode       String?      @unique @map("team_code") @db.VarChar(8)
   logoUrl        String?      @map("logo_url")
   primaryColor   String?      @default("#1E50FF") @map("primary_color") @db.VarChar(10)
   secondaryColor String?      @default("#FFFFFF") @map("secondary_color") @db.VarChar(10)

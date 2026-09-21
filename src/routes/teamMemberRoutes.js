@@ -3,6 +3,7 @@ import {
   getAllTeamMembers,
   addTeamMember,
   getTeamMembersByTeam,
+  getTeamMembersByPlayer,
   updateTeamMember,
   removeTeamMember
 } from '../controllers/teamMemberController.js';
@@ -13,6 +14,7 @@ const router = express.Router();
 // Public Routes (Anyone can view team rosters and players)
 router.get('/', getAllTeamMembers);
 router.get('/team/:teamId', getTeamMembersByTeam);
+router.get('/player/:playerId', getTeamMembersByPlayer);
 
 // Protected Routes (Must be authenticated to manage squad members)
 router.post('/', requireAuth, addTeamMember);

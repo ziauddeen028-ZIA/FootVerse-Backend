@@ -86,6 +86,14 @@ export const getAllMatches = async (req, res) => {
             shortName: true,
             logoUrl: true
           }
+        },
+        winnerTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
         }
       },
       orderBy: {
@@ -157,6 +165,14 @@ export const getTournamentMatches = async (req, res) => {
           }
         },
         awayTeam: {
+          select: {
+            id: true,
+            name: true,
+            shortName: true,
+            logoUrl: true
+          }
+        },
+        winnerTeam: {
           select: {
             id: true,
             name: true,
