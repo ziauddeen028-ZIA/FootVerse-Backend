@@ -18,20 +18,47 @@ import leagueRoutes from './src/routes/leagueRoutes.js';
 import notificationRoutes from './src/routes/notificationRoutes.js';
 import teamJoinRequestRoutes from './src/routes/teamJoinRequestRoutes.js';
 import tournamentJoinRequestRoutes from './src/routes/tournamentJoinRequestRoutes.js';
+import prisma from './src/lib/prisma.js';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 // Supabase client initialization
 const supabaseUrl = process.env.SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || 'placeholder-key';
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Warm up Prisma database connection on server startup to eliminate cold-start lag
+prisma.$connect()
+  .then(() => {
+    console.log('✅ Database connected successfully via Prisma');
+  })
+  .catch((err) => {
+    console.error('❌ Database connection warning on startup:', err.message || err);
+  });
+
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5000',
+  'http://127.0.0.1:5000',
+  process.env.CLIENT_ORIGIN
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
-  credentials: true
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. mobile apps, curl, server-to-server) or in allowed list
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, true); // Permissive in development
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.use(express.json());
 
@@ -76,6 +103,6 @@ app.get('/api/roles', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`⚽ FootVerse API server listening on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`⚽ FootVerse API server listening on http://${HOST}:${PORT} (http://localhost:${PORT})`);
 });
