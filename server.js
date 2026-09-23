@@ -43,18 +43,16 @@ prisma.$connect()
 const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-  'http://localhost:5000',
-  'http://127.0.0.1:5000',
   process.env.CLIENT_ORIGIN
 ].filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. mobile apps, curl, server-to-server) or in allowed list
     if (!origin || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-    return callback(null, true); // Permissive in development
+
+    return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
