@@ -101,6 +101,4 @@ app.get('/api/roles', (req, res) => {
   });
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`⚽ FootVerse API server listening on http://${HOST}:${PORT} (http://localhost:${PORT})`);
-});
+export default app;
