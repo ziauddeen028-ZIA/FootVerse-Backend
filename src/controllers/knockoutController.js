@@ -254,9 +254,20 @@ export const generateKnockoutBracket = async (req, res) => {
     }
 
     // 5. Execute atomic bracket creation inside a Prisma transaction
-    const { roundSpecs, createdMatches } = await prisma.$transaction(async (tx) => {
-      return await createBracketMatches(tx, tournamentId, orderedTeams, tournament.startDate);
-    });
+    const { roundSpecs, createdMatches } = await prisma.$transaction(
+      async (tx) => {
+        return await createBracketMatches(
+          tx,
+          tournamentId,
+          orderedTeams,
+          tournament.startDate
+        );
+      },
+      {
+        maxWait: 10000,
+        timeout: 15000,
+      }
+    );
 
     // 6. Group generated matches by round
     const bracket = {};
@@ -423,9 +434,20 @@ export const generateHybridKnockoutBracket = async (req, res) => {
     const orderedQualifiedTeams = pairQualifiedTeams(groups, qualifyingTeamsPerGroup);
 
     // 8. Generate knockout bracket using Prisma transaction and existing bracket generator helper
-    const { roundSpecs, createdMatches } = await prisma.$transaction(async (tx) => {
-      return await createBracketMatches(tx, tournamentId, orderedQualifiedTeams, tournament.startDate);
-    });
+    const { roundSpecs, createdMatches } = await prisma.$transaction(
+      async (tx) => {
+        return await createBracketMatches(
+          tx,
+          tournamentId,
+          orderedQualifiedTeams,
+          tournament.startDate
+        );
+      },
+      {
+        maxWait: 10000,
+        timeout: 15000,
+      }
+    );
 
     // 9. Group generated matches by round
     const bracket = {};
