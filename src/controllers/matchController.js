@@ -63,7 +63,29 @@ export const scheduleMatch = async (req, res) => {
 // READ all matches
 export const getAllMatches = async (req, res) => {
   try {
+    const callerId = req.user?.id ?? null;
+    const callerProfile = callerId
+      ? await prisma.profile.findUnique({ where: { id: callerId }, select: { role: true } })
+      : null;
+    const isAdmin = callerProfile?.role === 'admin';
+
+    const { tournamentId, organizerId, mine } = req.query;
+    let whereClause = {};
+
+    if (mine === 'true' && callerId) {
+      if (!isAdmin) {
+        whereClause.tournament = { organizerId: callerId };
+      }
+    } else if (organizerId) {
+      whereClause.tournament = { organizerId };
+    }
+
+    if (tournamentId) {
+      whereClause.tournamentId = tournamentId;
+    }
+
     const matches = await prisma.match.findMany({
+      where: whereClause,
       include: {
         tournament: {
           select: {

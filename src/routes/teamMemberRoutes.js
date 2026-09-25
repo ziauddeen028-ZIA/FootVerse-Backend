@@ -8,11 +8,12 @@ import {
   removeTeamMember
 } from '../controllers/teamMemberController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
+import { optionalAuth } from '../middleware/optionalAuth.js';
 
 const router = express.Router();
 
-// Public Routes (Anyone can view team rosters and players)
-router.get('/', getAllTeamMembers);
+// Public Routes (Anyone can view team rosters and players, optionalAuth enables filtering)
+router.get('/', optionalAuth, getAllTeamMembers);
 router.get('/team/:teamId', getTeamMembersByTeam);
 router.get('/player/:playerId', getTeamMembersByPlayer);
 

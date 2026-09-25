@@ -8,11 +8,12 @@ import {
   getTeamCode
 } from '../controllers/teamController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
+import { optionalAuth } from '../middleware/optionalAuth.js';
 
 const router = express.Router();
 
-// Public Routes (Anyone can see teams)
-router.get('/', getAllTeams);
+// Public Routes (Anyone can see teams, optionalAuth enables caller-specific filtering)
+router.get('/', optionalAuth, getAllTeams);
 router.get('/:id', getTeamById);
 
 // Protected Routes (You must have a valid badge)

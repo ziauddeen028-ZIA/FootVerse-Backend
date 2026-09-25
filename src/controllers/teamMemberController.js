@@ -4,7 +4,33 @@ import { createNotification } from './notificationController.js';
 // GET /api/team-members - Get all team members across all teams
 export const getAllTeamMembers = async (req, res) => {
   try {
+    const callerId = req.user?.id ?? null;
+    const callerProfile = callerId
+      ? await prisma.profile.findUnique({ where: { id: callerId }, select: { role: true } })
+      : null;
+    const isAdmin = callerProfile?.role === 'admin';
+
+    const { tournamentId, organizerId, mine } = req.query;
+    let whereClause = {};
+
+    if (mine === 'true' && callerId) {
+      if (!isAdmin) {
+        whereClause.team = { tournament: { organizerId: callerId } };
+      }
+    } else if (organizerId) {
+      whereClause.team = { tournament: { organizerId } };
+    }
+
+    if (tournamentId) {
+      if (whereClause.team) {
+        whereClause.team.tournamentId = tournamentId;
+      } else {
+        whereClause.team = { tournamentId };
+      }
+    }
+
     const members = await prisma.teamMember.findMany({
+      where: whereClause,
       include: {
         player: true,
         team: {

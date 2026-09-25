@@ -141,7 +141,19 @@ export const getAllTournaments = async (req, res) => {
       : null;
     const isAdmin = callerProfile?.role === 'admin';
 
+    const { organizerId, mine } = req.query;
+    let whereClause = {};
+
+    if (mine === 'true' && callerId) {
+      if (!isAdmin) {
+        whereClause.organizerId = callerId;
+      }
+    } else if (organizerId) {
+      whereClause.organizerId = organizerId;
+    }
+
     const rawTournaments = await prisma.tournament.findMany({
+      where: whereClause,
       include: {
         _count: {
           select: {
@@ -169,6 +181,268 @@ export const getAllTournaments = async (req, res) => {
     res.status(200).json({ tournaments });
   } catch (err) {
     console.error('Error fetching tournaments:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// GET Organizer Dashboard Data (Scoped to current authenticated organizer)
+export const getOrganizerDashboard = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Check user profile and role
+    const user = await prisma.profile.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true, fullName: true, email: true }
+    });
+
+    if (!user || (user.role !== 'organizer' && user.role !== 'admin')) {
+      return res.status(403).json({ error: 'Access denied. Organizer or admin role required.' });
+    }
+
+    const isAdmin = user.role === 'admin';
+
+    // 1. Tournaments:
+    // If admin: all tournaments; If organizer: strictly where organizerId === userId
+    const tournamentWhere = isAdmin ? {} : { organizerId: userId };
+
+    const tournaments = await prisma.tournament.findMany({
+      where: tournamentWhere,
+      include: {
+        _count: {
+          select: {
+            teams: true,
+            matches: true
+          }
+        },
+        organizer: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const tournamentIds = tournaments.map(t => t.id);
+
+    // 2. Registered Teams:
+    // Only teams registered in this organizer's tournaments (or all if admin)
+    const teams = (tournamentIds.length > 0 || isAdmin)
+      ? await prisma.team.findMany({
+          where: isAdmin ? {} : { tournamentId: { in: tournamentIds } },
+          include: {
+            tournament: {
+              select: {
+                id: true,
+                name: true,
+                organizerId: true
+              }
+            },
+            _count: {
+              select: {
+                members: true
+              }
+            }
+          },
+          orderBy: { createdAt: 'desc' }
+        })
+      : [];
+
+    const teamIds = teams.map(t => t.id);
+
+    // 3. Total Players:
+    // Only players/team members belonging to that organizer's tournaments/teams
+    const totalPlayersCount = (tournamentIds.length > 0 || isAdmin) && (teamIds.length > 0 || isAdmin)
+      ? await prisma.teamMember.count({
+          where: isAdmin
+            ? {}
+            : {
+                OR: [
+                  { teamId: { in: teamIds } },
+                  { team: { tournamentId: { in: tournamentIds } } }
+                ]
+              }
+        })
+      : 0;
+
+    // 4. Matches (all & upcoming):
+    // Only matches from that organizer's tournaments
+    const matches = (tournamentIds.length > 0 || isAdmin)
+      ? await prisma.match.findMany({
+          where: isAdmin ? {} : { tournamentId: { in: tournamentIds } },
+          include: {
+            tournament: {
+              select: {
+                id: true,
+                name: true
+              }
+            },
+            homeTeam: {
+              select: {
+                id: true,
+                name: true,
+                shortName: true,
+                logoUrl: true
+              }
+            },
+            awayTeam: {
+              select: {
+                id: true,
+                name: true,
+                shortName: true,
+                logoUrl: true
+              }
+            },
+            winnerTeam: {
+              select: {
+                id: true,
+                name: true,
+                shortName: true,
+                logoUrl: true
+              }
+            }
+          },
+          orderBy: { matchDate: 'asc' }
+        })
+      : [];
+
+    const upcomingMatchesCount = matches.filter(
+      m => m.status !== 'Completed' && m.status !== 'completed' && m.status !== 'fulltime'
+    ).length;
+
+    // 5. Dynamic Recent Activity:
+    // Activities exclusively for this organizer's tournaments, teams, players, and matches
+    const activities = [];
+
+    // Tournament Created
+    tournaments.forEach(t => {
+      if (t.createdAt) {
+        activities.push({
+          id: `tournament-created-${t.id}`,
+          type: 'tournament_created',
+          action: `New tournament '${t.name}' was created.`,
+          timestamp: t.createdAt,
+          color: 'bg-green-600',
+        });
+      }
+    });
+
+    // Team Registered
+    teams.forEach(team => {
+      if (team.createdAt) {
+        const tournamentName = team.tournament?.name || tournaments.find(t => t.id === team.tournamentId)?.name;
+        activities.push({
+          id: `team-registered-${team.id}`,
+          type: 'team_registered',
+          action: tournamentName
+            ? `Team '${team.name}' registered for ${tournamentName}.`
+            : `Team '${team.name}' registered.`,
+          timestamp: team.createdAt,
+          color: 'bg-emerald-600',
+        });
+      }
+    });
+
+    // Tournament Completed
+    tournaments.forEach(t => {
+      const tMatches = matches.filter(m => m.tournamentId === t.id);
+      const isMarkedCompleted = t.status === 'completed';
+      const allMatchesFinished = tMatches.length > 0 && tMatches.every(m => m.status === 'completed' || m.status === 'fulltime');
+
+      if (isMarkedCompleted || allMatchesFinished) {
+        let winnerName = null;
+        let completionTime = t.updatedAt || t.createdAt;
+
+        // Knockout / Hybrid: find Final match
+        const finalMatch = tMatches.find(m => m.roundName && m.roundName.toLowerCase().trim() === 'final');
+        if (finalMatch && (finalMatch.status === 'completed' || finalMatch.status === 'fulltime')) {
+          winnerName = finalMatch.winnerTeam?.name ||
+            (finalMatch.winnerTeamId && (finalMatch.homeTeam?.id === finalMatch.winnerTeamId ? finalMatch.homeTeam?.name : finalMatch.awayTeam?.name)) ||
+            (finalMatch.homeScore > finalMatch.awayScore ? finalMatch.homeTeam?.name : (finalMatch.awayScore > finalMatch.homeScore ? finalMatch.awayTeam?.name : null));
+          completionTime = finalMatch.updatedAt || finalMatch.matchDate || completionTime;
+        }
+
+        // League: calculate standings if no final match
+        if (!winnerName && tMatches.length > 0) {
+          const teamScores = {};
+          tMatches.filter(m => m.status === 'completed' || m.status === 'fulltime').forEach(m => {
+            const hId = m.homeTeamId;
+            const aId = m.awayTeamId;
+            const hName = m.homeTeam?.name || 'Team';
+            const aName = m.awayTeam?.name || 'Team';
+            if (hId) {
+              if (!teamScores[hId]) teamScores[hId] = { name: hName, pts: 0, gd: 0, gf: 0 };
+              const hScore = m.homeScore ?? 0;
+              const aScore = m.awayScore ?? 0;
+              teamScores[hId].gf += hScore;
+              teamScores[hId].gd += (hScore - aScore);
+              if (hScore > aScore) teamScores[hId].pts += 3;
+              else if (hScore === aScore) teamScores[hId].pts += 1;
+            }
+            if (aId) {
+              if (!teamScores[aId]) teamScores[aId] = { name: aName, pts: 0, gd: 0, gf: 0 };
+              const hScore = m.homeScore ?? 0;
+              const aScore = m.awayScore ?? 0;
+              teamScores[aId].gf += aScore;
+              teamScores[aId].gd += (aScore - hScore);
+              if (aScore > hScore) teamScores[aId].pts += 3;
+              else if (aScore === hScore) teamScores[aId].pts += 1;
+            }
+          });
+          const sorted = Object.values(teamScores).sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf);
+          if (sorted.length > 0) {
+            winnerName = sorted[0].name;
+          }
+        }
+
+        if (isMarkedCompleted || winnerName) {
+          activities.push({
+            id: `tournament-completed-${t.id}`,
+            type: 'tournament_completed',
+            action: winnerName
+              ? `Tournament '${t.name}' completed. Winner: ${winnerName}`
+              : `Tournament '${t.name}' completed.`,
+            timestamp: completionTime,
+            color: 'bg-green-600',
+          });
+        }
+      }
+    });
+
+    const sortedActivities = activities
+      .filter(a => a.timestamp)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 3);
+
+    const formattedTournaments = tournaments.map(t => {
+      const { _count, tournamentCode, ...rest } = t;
+      const config = parseTournamentConfig(t.description);
+      return {
+        ...rest,
+        fieldSize: config.fieldSize,
+        substitutionMode: config.substitutionMode,
+        registeredTeamsCount: _count?.teams ?? 0,
+        tournamentCode
+      };
+    });
+
+    return res.status(200).json({
+      stats: {
+        tournaments: formattedTournaments.length,
+        teams: teams.length,
+        players: totalPlayersCount,
+        upcomingMatches: upcomingMatchesCount
+      },
+      tournaments: formattedTournaments,
+      teams,
+      matches,
+      recentActivities: sortedActivities
+    });
+  } catch (err) {
+    console.error('Error fetching organizer dashboard data:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 };

@@ -8,11 +8,12 @@ import {
   deleteMatch
 } from '../controllers/matchController.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
+import { optionalAuth } from '../middleware/optionalAuth.js';
 
 const router = express.Router();
 
-// Public Routes
-router.get('/', getAllMatches);
+// Public Routes (with optionalAuth to allow caller-based query filtering)
+router.get('/', optionalAuth, getAllMatches);
 router.get('/tournament/:tournamentId', getTournamentMatches);
 router.get('/:id', getMatchById);
 
