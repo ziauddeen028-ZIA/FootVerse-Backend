@@ -132,6 +132,7 @@ model Match {
   venue             String?
   refereeName       String?      @map("referee_name")
   mvpPlayerId       String?      @map("mvp_player_id") @db.Uuid
+  startedAt         DateTime?    @map("started_at") @db.Timestamptz(6)
   createdAt         DateTime?    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime?    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   events            MatchEvent[]

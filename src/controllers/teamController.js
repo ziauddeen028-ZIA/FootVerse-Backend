@@ -143,7 +143,7 @@ export const createTeam = async (req, res) => {
   }
 };
 
-// READ all teams (Public)
+// READ all teams (Public with optional caller filtering)
 export const getAllTeams = async (req, res) => {
   try {
     const callerId = req.user?.id ?? null;
@@ -152,10 +152,18 @@ export const getAllTeams = async (req, res) => {
       : null;
     const isAdmin = callerProfile?.role === 'admin';
 
-    const { tournamentId, organizerId, mine } = req.query;
+    const { tournamentId, organizerId, mine, myTeams, eligibleForQuickMatch } = req.query;
     let whereClause = {};
 
-    if (mine === 'true' && callerId) {
+    if (myTeams === 'true' || eligibleForQuickMatch === 'true') {
+      if (!callerId) {
+        return res.status(200).json({ teams: [] });
+      }
+      whereClause.OR = [
+        { managerId: callerId },
+        { members: { some: { playerId: callerId } } }
+      ];
+    } else if (mine === 'true' && callerId) {
       if (!isAdmin) {
         whereClause.tournament = { organizerId: callerId };
       }
