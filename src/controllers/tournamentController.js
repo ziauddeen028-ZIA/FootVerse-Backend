@@ -141,7 +141,7 @@ export const getAllTournaments = async (req, res) => {
       : null;
     const isAdmin = callerProfile?.role === 'admin';
 
-    const { organizerId, mine } = req.query;
+    const { organizerId, mine, search } = req.query;
     let whereClause = {};
 
     if (mine === 'true' && callerId) {
@@ -150,6 +150,13 @@ export const getAllTournaments = async (req, res) => {
       }
     } else if (organizerId) {
       whereClause.organizerId = organizerId;
+    }
+
+    if (search && search.trim()) {
+      whereClause.OR = [
+        { name: { contains: search.trim(), mode: 'insensitive' } },
+        { location: { contains: search.trim(), mode: 'insensitive' } }
+      ];
     }
 
     const rawTournaments = await prisma.tournament.findMany({

@@ -1,31 +1,42 @@
+import crypto from 'crypto';
 import prisma from '../lib/prisma.js';
 import { advanceKnockoutWinner } from './knockoutController.js';
 import { createNotification } from './notificationController.js';
 
-// CREATE (Schedule) a new match
+// ─── Helper: Generate 8-char unique alphanumeric Match Code ──────────────────
+function generateMatchCode() {
+  return crypto.randomBytes(4).toString('hex').toUpperCase(); // e.g. "8F2B1C9D"
+}
+
+// CREATE (Schedule) a new match (Supports Tournament Match or Quick Match)
 export const scheduleMatch = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue, status } = req.body;
+    const { tournamentId, homeTeamId, awayTeamId, matchDate, roundName, venue, status, matchCode: customCode } = req.body;
 
-    // Verify the user is the organizer of this tournament (or an admin)
-    const tournament = await prisma.tournament.findUnique({ where: { id: tournamentId } });
-    if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+    const matchCode = customCode || generateMatchCode();
 
-    const user = await prisma.profile.findUnique({ where: { id: userId } });
-    if (tournament.organizerId !== userId && user.role !== 'admin') {
-      return res.status(403).json({ error: 'Only the organizer can schedule matches.' });
+    if (tournamentId) {
+      // Verify the user is the organizer of this tournament (or an admin)
+      const tournament = await prisma.tournament.findUnique({ where: { id: tournamentId } });
+      if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+
+      const user = await prisma.profile.findUnique({ where: { id: userId } });
+      if (tournament.organizerId !== userId && user.role !== 'admin') {
+        return res.status(403).json({ error: 'Only the organizer can schedule tournament matches.' });
+      }
     }
 
     const newMatch = await prisma.match.create({
       data: {
-        tournamentId: tournamentId,
-        homeTeamId: homeTeamId,
-        awayTeamId: awayTeamId,
-        matchDate: new Date(matchDate),
-        roundName: roundName || 'Group Stage',
-        venue: venue || null,
-        status: status || 'scheduled'
+        tournamentId: tournamentId || null,
+        homeTeamId: homeTeamId || null,
+        awayTeamId: awayTeamId || null,
+        matchDate: matchDate ? new Date(matchDate) : new Date(),
+        roundName: roundName || (tournamentId ? 'Group Stage' : 'Quick Match'),
+        venue: venue || (tournamentId ? null : 'Local Pitch'),
+        status: status || 'scheduled',
+        refereeName: matchCode // Store matchCode in refereeName for persistent quick-lookup
       },
       include: {
         tournament: {
@@ -53,12 +64,23 @@ export const scheduleMatch = async (req, res) => {
       }
     });
 
-    res.status(201).json({ message: 'Match scheduled!', match: newMatch });
+    res.status(201).json({
+      message: tournamentId ? 'Match scheduled!' : 'Quick Match created!',
+      match: { ...newMatch, matchCode }
+    });
   } catch (err) {
     console.error('Error scheduling match:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 };
+
+// ─── Helper to extract or ensure matchCode ────────────────────────────────────
+function getMatchCodeFromMatch(m) {
+  if (m?.refereeName && m.refereeName.length >= 6 && !m.refereeName.includes(' ') && /^[A-Z0-9_-]+$/i.test(m.refereeName)) {
+    return m.refereeName.toUpperCase();
+  }
+  return m?.id ? m.id.replace(/-/g, '').slice(0, 8).toUpperCase() : 'FOOTMATCH';
+}
 
 // READ all matches
 export const getAllMatches = async (req, res) => {
@@ -69,22 +91,33 @@ export const getAllMatches = async (req, res) => {
       : null;
     const isAdmin = callerProfile?.role === 'admin';
 
-    const { tournamentId, organizerId, mine } = req.query;
+    const { tournamentId, organizerId, mine, isQuickMatch } = req.query;
     let whereClause = {};
+
+    if (isQuickMatch === 'true') {
+      whereClause.tournamentId = null;
+    } else if (tournamentId) {
+      whereClause.tournamentId = tournamentId;
+    }
 
     if (mine === 'true' && callerId) {
       if (!isAdmin) {
-        whereClause.tournament = { organizerId: callerId };
+        if (isQuickMatch === 'true') {
+          whereClause.OR = [
+            { homeTeam: { managerId: callerId } },
+            { awayTeam: { managerId: callerId } },
+            { homeTeam: { members: { some: { playerId: callerId } } } },
+            { awayTeam: { members: { some: { playerId: callerId } } } }
+          ];
+        } else {
+          whereClause.tournament = { organizerId: callerId };
+        }
       }
     } else if (organizerId) {
       whereClause.tournament = { organizerId };
     }
 
-    if (tournamentId) {
-      whereClause.tournamentId = tournamentId;
-    }
-
-    const matches = await prisma.match.findMany({
+    const rawMatches = await prisma.match.findMany({
       where: whereClause,
       include: {
         tournament: {
@@ -123,6 +156,11 @@ export const getAllMatches = async (req, res) => {
       }
     });
 
+    const matches = rawMatches.map(m => ({
+      ...m,
+      matchCode: getMatchCodeFromMatch(m)
+    }));
+
     res.status(200).json({ matches });
   } catch (err) {
     console.error('Error fetching all matches:', err);
@@ -155,9 +193,177 @@ export const getMatchById = async (req, res) => {
 
     if (!match) return res.status(404).json({ error: 'Match not found.' });
 
-    res.status(200).json({ match });
+    res.status(200).json({
+      match: {
+        ...match,
+        matchCode: getMatchCodeFromMatch(match)
+      }
+    });
   } catch (err) {
     console.error('Error fetching match by ID:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// LOOKUP match by 8-character Match Code (Quick Match or code)
+export const getMatchByCode = async (req, res) => {
+  try {
+    const { code } = req.params;
+    if (!code) return res.status(400).json({ error: 'Match code is required.' });
+
+    const normalizedCode = String(code).trim().toUpperCase().replace(/^(QM-|MCH-)/i, '');
+
+    let match = await prisma.match.findFirst({
+      where: {
+        OR: [
+          { refereeName: normalizedCode },
+          { refereeName: `QM-${normalizedCode}` },
+          { refereeName: `MCH-${normalizedCode}` }
+        ]
+      },
+      include: {
+        tournament: { select: { id: true, name: true, format: true } },
+        homeTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } },
+        awayTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } },
+        winnerTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } }
+      }
+    });
+
+    if (!match && normalizedCode.length >= 8) {
+      const isFullUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalizedCode);
+      if (isFullUuid) {
+        match = await prisma.match.findUnique({
+          where: { id: normalizedCode },
+          include: {
+            tournament: { select: { id: true, name: true, format: true } },
+            homeTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } },
+            awayTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } },
+            winnerTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } }
+          }
+        });
+      }
+    }
+
+    if (!match) {
+      return res.status(404).json({ error: 'Match not found with the provided code.' });
+    }
+
+    res.status(200).json({
+      match: {
+        ...match,
+        matchCode: getMatchCodeFromMatch(match)
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching match by code:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+// JOIN a Quick Match by code (Opposing team connects)
+export const joinQuickMatchByCode = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { code, teamId } = req.body;
+
+    if (!code || !teamId) {
+      return res.status(400).json({ error: 'Match code and teamId are required.' });
+    }
+
+    const normalizedCode = String(code).trim().toUpperCase().replace(/^(QM-|MCH-)/i, '');
+
+    let match = await prisma.match.findFirst({
+      where: {
+        OR: [
+          { refereeName: normalizedCode },
+          { refereeName: `QM-${normalizedCode}` },
+          { refereeName: `MCH-${normalizedCode}` }
+        ]
+      },
+      include: {
+        homeTeam: { select: { id: true, name: true, managerId: true } },
+        awayTeam: { select: { id: true, name: true, managerId: true } }
+      }
+    });
+
+    if (!match && normalizedCode.length >= 8) {
+      const isFullUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalizedCode);
+      if (isFullUuid) {
+        match = await prisma.match.findUnique({
+          where: { id: normalizedCode },
+          include: {
+            homeTeam: { select: { id: true, name: true, managerId: true } },
+            awayTeam: { select: { id: true, name: true, managerId: true } }
+          }
+        });
+      }
+    }
+
+    if (!match) {
+      return res.status(404).json({ error: 'Quick Match not found for this code.' });
+    }
+
+    if (match.status === 'fulltime' || match.status === 'completed' || match.status === 'cancelled') {
+      return res.status(400).json({ error: 'This match has already concluded or was cancelled.' });
+    }
+
+    const team = await prisma.team.findUnique({
+      where: { id: teamId },
+      include: {
+        members: { where: { playerId: userId } }
+      }
+    });
+
+    if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+    const isManager = team.managerId === userId;
+    const isCaptain = team.members.some(m => m.isCaptain);
+    const user = await prisma.profile.findUnique({ where: { id: userId }, select: { role: true } });
+    const isAdmin = user?.role === 'admin';
+
+    if (!isManager && !isCaptain && !isAdmin && user?.role !== 'organizer') {
+      return res.status(403).json({ error: 'Only team manager, captain, or organizer can join this match.' });
+    }
+
+    if (match.homeTeamId === teamId) {
+      return res.status(400).json({ error: 'Your team is already the Home Team for this match.' });
+    }
+
+    if (match.awayTeamId && match.awayTeamId !== teamId) {
+      return res.status(400).json({ error: 'An opposing team has already joined this Quick Match.' });
+    }
+
+    const updatedMatch = await prisma.match.update({
+      where: { id: match.id },
+      data: {
+        awayTeamId: teamId
+      },
+      include: {
+        tournament: { select: { id: true, name: true, format: true } },
+        homeTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } },
+        awayTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } }
+      }
+    });
+
+    if (match.homeTeam?.managerId) {
+      await createNotification({
+        userId: match.homeTeam.managerId,
+        title: 'Opponent Connected!',
+        message: `"${team.name}" has joined your Quick Match. You can now start the match!`,
+        type: 'success',
+        link: `/matches/${match.id}`
+      });
+    }
+
+    res.status(200).json({
+      message: `Team "${team.name}" joined the Quick Match!`,
+      match: {
+        ...updatedMatch,
+        matchCode: getMatchCodeFromMatch(updatedMatch)
+      }
+    });
+  } catch (err) {
+    console.error('Error joining quick match by code:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 };
@@ -207,7 +413,13 @@ export const getTournamentMatches = async (req, res) => {
         matchDate: "asc"
       }
     });
-    res.status(200).json({ matches });
+
+    const formatted = matches.map(m => ({
+      ...m,
+      matchCode: getMatchCodeFromMatch(m)
+    }));
+
+    res.status(200).json({ matches: formatted });
   } catch (err) {
     console.error('Error fetching matches:', err);
     res.status(500).json({ error: 'Internal server error.' });
@@ -233,7 +445,7 @@ export const updateMatchStatus = async (req, res) => {
     // Verify permissions
     const user = await prisma.profile.findUnique({ where: { id: userId } });
     if (match.tournament && match.tournament.organizerId !== userId && user.role !== 'admin') {
-      return res.status(403).json({ error: 'Only the organizer can update matches.' });
+      return res.status(403).json({ error: 'Only the organizer can update tournament matches.' });
     }
 
     const updateData = {};
@@ -338,7 +550,6 @@ export const updateMatchStatus = async (req, res) => {
         const awayTeamName = updatedMatch.awayTeam?.name || 'Away Team';
         const resultMsg = `${homeTeamName} ${homeScore} – ${awayScore} ${awayTeamName}`;
 
-        // Gather player IDs from both teams
         const [homeMembers, awayMembers] = await Promise.all([
           updatedMatch.homeTeamId
             ? prisma.teamMember.findMany({ where: { teamId: updatedMatch.homeTeamId }, select: { playerId: true } })
@@ -368,7 +579,13 @@ export const updateMatchStatus = async (req, res) => {
       }
     }
 
-    res.status(200).json({ message: 'Match updated!', match: updatedMatch });
+    res.status(200).json({
+      message: 'Match updated!',
+      match: {
+        ...updatedMatch,
+        matchCode: getMatchCodeFromMatch(updatedMatch)
+      }
+    });
   } catch (err) {
     console.error('Error updating match:', err);
     res.status(500).json({ error: 'Internal server error.' });
@@ -392,7 +609,7 @@ export const deleteMatch = async (req, res) => {
 
     const user = await prisma.profile.findUnique({ where: { id: userId } });
     if (match.tournament && match.tournament.organizerId !== userId && user.role !== 'admin') {
-      return res.status(403).json({ error: 'Only the organizer can delete matches.' });
+      return res.status(403).json({ error: 'Only the organizer can delete tournament matches.' });
     }
 
     await prisma.match.delete({ where: { id } });
