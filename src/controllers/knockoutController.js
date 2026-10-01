@@ -437,10 +437,62 @@ export const generateHybridKnockoutBracket = async (req, res) => {
       });
     }
 
-    // Pair qualified teams using crossover ordering
-    const orderedQualifiedTeams = pairQualifiedTeams(groups, qualifyingTeamsPerGroup);
+    // 8. Determine final ordered teams for bracket generation
+    let orderedQualifiedTeams = [];
+    const { orderedTeamIds, matchups } = req.body || {};
 
-    // 8. Generate knockout bracket using Prisma transaction and existing bracket generator helper
+    let customIds = [];
+    if (Array.isArray(orderedTeamIds) && orderedTeamIds.length > 0) {
+      customIds = orderedTeamIds;
+    } else if (Array.isArray(matchups) && matchups.length > 0) {
+      for (const m of matchups) {
+        if (!m.homeTeamId || !m.awayTeamId) {
+          return res.status(400).json({
+            error: 'Each matchup must have both a home team and an away team selected.'
+          });
+        }
+        if (m.homeTeamId === m.awayTeamId) {
+          return res.status(400).json({
+            error: 'A team cannot play against itself in a matchup.'
+          });
+        }
+        customIds.push(m.homeTeamId, m.awayTeamId);
+      }
+    }
+
+    if (customIds.length > 0) {
+      if (customIds.length !== totalQualifiedCount) {
+        return res.status(400).json({
+          error: `Manual bracket requires all ${totalQualifiedCount} qualified teams to be assigned to matchups. Currently provided: ${customIds.length}.`
+        });
+      }
+
+      // Collect all qualified teams into a map
+      const qualifiedTeamsMap = new Map();
+      for (const group of groups) {
+        for (let i = 0; i < qualifyingTeamsPerGroup; i++) {
+          const row = group.standings[i];
+          if (row && row.team) {
+            qualifiedTeamsMap.set(row.team.id, row.team);
+          }
+        }
+      }
+
+      for (const id of customIds) {
+        const teamObj = qualifiedTeamsMap.get(id);
+        if (!teamObj) {
+          return res.status(400).json({
+            error: `Team with ID "${id}" is not among the qualified teams for the knockout stage.`
+          });
+        }
+        orderedQualifiedTeams.push(teamObj);
+      }
+    } else {
+      // Pair qualified teams using crossover ordering
+      orderedQualifiedTeams = pairQualifiedTeams(groups, qualifyingTeamsPerGroup);
+    }
+
+    // 9. Generate knockout bracket using Prisma transaction and existing bracket generator helper
     const { roundSpecs, createdMatches } = await prisma.$transaction(
       async (tx) => {
         return await createBracketMatches(
