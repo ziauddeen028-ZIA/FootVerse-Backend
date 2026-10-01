@@ -1,5 +1,4 @@
 import prisma from '../lib/prisma.js';
-import { createNotification } from './notificationController.js';
 
 // GET /api/team-members - Get all team members across all teams
 export const getAllTeamMembers = async (req, res) => {
@@ -251,17 +250,6 @@ export const addTeamMember = async (req, res) => {
         }
       }
     });
-
-    // Notify the player that they've been added to a team
-    if (playerProfile?.id) {
-      await createNotification({
-        userId: playerProfile.id,
-        title: 'You\'ve joined a team!',
-        message: `You have been added to ${newMember.team?.name || 'a team'}. Welcome aboard!`,
-        type: 'success',
-        link: `/teams/${newMember.teamId}`
-      });
-    }
 
     res.status(201).json({ message: 'Team member added!', teamMember: newMember });
   } catch (err) {

@@ -1,5 +1,4 @@
 import prisma from '../lib/prisma.js';
-import { createNotification } from './notificationController.js';
 
 // ─── POST /api/tournament-join-requests ────────────────────────────────────
 // Team Manager requests to register a team for a tournament
@@ -75,17 +74,6 @@ export const createJoinRequest = async (req, res) => {
           status: 'pending'
         },
         include: { tournament: true, team: true }
-      });
-    }
-
-    // Notify tournament organizer if organizer exists and is not the requester
-    if (tournament.organizerId && tournament.organizerId !== userId) {
-      await createNotification({
-        userId: tournament.organizerId,
-        title: 'New Tournament Join Request',
-        message: `Team "${team.name}" requested to join "${tournament.name}".`,
-        type: 'info',
-        link: `/organizer/tournaments`
       });
     }
 
@@ -226,17 +214,6 @@ export const approveJoinRequest = async (req, res) => {
       data: { tournamentId: request.tournamentId }
     });
 
-    // Notify team manager
-    if (request.team?.managerId) {
-      await createNotification({
-        userId: request.team.managerId,
-        title: 'Tournament Request Approved',
-        message: `Your request for "${request.team.name}" to join "${request.tournament?.name}" has been approved!`,
-        type: 'success',
-        link: `/tournaments/${request.tournamentId}`
-      });
-    }
-
     res.status(200).json({
       message: 'Tournament Request Approved',
       joinRequest: updatedRequest
@@ -274,17 +251,6 @@ export const rejectJoinRequest = async (req, res) => {
       data: { status: 'rejected', updatedAt: new Date() },
       include: { tournament: true, team: true }
     });
-
-    // Notify team manager
-    if (request.team?.managerId) {
-      await createNotification({
-        userId: request.team.managerId,
-        title: 'Tournament Request Rejected',
-        message: `Your request for "${request.team.name}" to join "${request.tournament?.name}" was rejected.`,
-        type: 'warning',
-        link: `/tournaments/${request.tournamentId}`
-      });
-    }
 
     res.status(200).json({
       message: 'Tournament Request Rejected',
@@ -396,28 +362,6 @@ export const joinByCode = async (req, res) => {
       },
       include: { tournament: true, team: true }
     });
-
-    // ── 9. Notify organizer ──────────────────────────────────────────────
-    if (tournament.organizerId && tournament.organizerId !== userId) {
-      await createNotification({
-        userId: tournament.organizerId,
-        title: 'Team Joined via Code',
-        message: `"${team.name}" joined "${tournament.name}" using the tournament invite code.`,
-        type: 'info',
-        link: `/organizer/tournaments`
-      });
-    }
-
-    // ── 10. Notify the team manager (if different from the caller) ─────────
-    if (team.managerId && team.managerId !== userId) {
-      await createNotification({
-        userId: team.managerId,
-        title: 'Team Registered for Tournament',
-        message: `Your team "${team.name}" was registered for "${tournament.name}" using the tournament invite code.`,
-        type: 'success',
-        link: `/tournaments/${tournament.id}`
-      });
-    }
 
     res.status(200).json({
       message: `"${team.name}" has been successfully registered for "${tournament.name}"!`,

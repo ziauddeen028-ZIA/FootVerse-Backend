@@ -1,5 +1,4 @@
 import prisma from '../lib/prisma.js';
-import { createNotification } from './notificationController.js';
 import { randomBytes } from 'crypto';
 
 // ─── Team Code Generator ─────────────────────────────────────────────────────
@@ -124,17 +123,6 @@ export const createTeam = async (req, res) => {
         }
       });
     }
-
-    // Notify the manager/captain that their team was created
-    await createNotification({
-      userId: managerId,
-      title: 'Team Created!',
-      message: newTeam.tournament?.name
-        ? `Your team "${newTeam.name}" has been registered for "${newTeam.tournament.name}" successfully.`
-        : `Your team "${newTeam.name}" has been created successfully.`,
-      type: 'success',
-      link: `/teams/${newTeam.id}`
-    });
 
     res.status(201).json({ message: 'Team created!', team: newTeam });
   } catch (err) {

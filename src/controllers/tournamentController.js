@@ -1,5 +1,4 @@
 import prisma from '../lib/prisma.js';
-import { createNotification } from './notificationController.js';
 import crypto from 'crypto';
 
 // ─── Helper: generate a unique 8-char uppercase alphanumeric tournament code ──
@@ -156,15 +155,6 @@ export const createTournament = async (req, res) => {
       seedingMethod: config.seedingMethod,
     };
 
-    // Notify the organizer that their tournament was created
-    await createNotification({
-      userId: organizerId,
-      title: 'Tournament Created!',
-      message: `Your tournament "${newTournament.name}" has been created. Share the join code "${tournamentCode}" with team captains/managers.`,
-      type: 'success',
-      link: `/tournaments/${newTournament.slug || newTournament.id}`
-    });
-
     res.status(201).json({ message: 'Tournament created!', tournament: tournamentResponse });
   } catch (err) {
     console.error('Error creating tournament:', err);
@@ -205,7 +195,15 @@ export const getAllTournaments = async (req, res) => {
       include: {
         _count: {
           select: {
-            teams: true
+            teams: true,
+            matches: true
+          }
+        },
+        matches: {
+          select: {
+            id: true,
+            bracketPosition: true,
+            roundName: true
           }
         }
       },
@@ -213,9 +211,12 @@ export const getAllTournaments = async (req, res) => {
     });
 
     const tournaments = rawTournaments.map(t => {
-      const { _count, tournamentCode, ...rest } = t;
+      const { _count, matches = [], tournamentCode, ...rest } = t;
       const isOrganizer = callerId && t.organizerId === callerId;
       const config = parseTournamentConfig(t.description);
+      const groupMatches = matches.filter(m => m.bracketPosition === null);
+      const bracketMatches = matches.filter(m => m.bracketPosition !== null);
+
       return {
         ...rest,
         fieldSize: config.fieldSize,
@@ -227,6 +228,12 @@ export const getAllTournaments = async (req, res) => {
         includeThirdPlace: config.includeThirdPlace,
         seedingMethod: config.seedingMethod,
         registeredTeamsCount: _count?.teams ?? 0,
+        matchesCount: _count?.matches ?? matches.length,
+        hasFixtures: (_count?.matches ?? 0) > 0 || matches.length > 0,
+        hasGroupFixtures: groupMatches.length > 0,
+        hasBracketFixtures: bracketMatches.length > 0,
+        groupMatchesCount: groupMatches.length,
+        bracketMatchesCount: bracketMatches.length,
         // Only expose the code to the organizer of this tournament or an admin
         ...(isOrganizer || isAdmin ? { tournamentCode } : {})
       };
@@ -526,7 +533,15 @@ export const getTournamentBySlug = async (req, res) => {
         },
         _count: {
           select: {
-            teams: true
+            teams: true,
+            matches: true
+          }
+        },
+        matches: {
+          select: {
+            id: true,
+            bracketPosition: true,
+            roundName: true
           }
         }
       }
@@ -534,9 +549,11 @@ export const getTournamentBySlug = async (req, res) => {
 
     if (!rawTournament) return res.status(404).json({ error: 'Tournament not found.' });
 
-    const { _count, tournamentCode, ...rest } = rawTournament;
+    const { _count, matches = [], tournamentCode, ...rest } = rawTournament;
     const isOrganizer = callerId && rawTournament.organizerId === callerId;
     const config = parseTournamentConfig(rawTournament.description);
+    const groupMatches = matches.filter(m => m.bracketPosition === null);
+    const bracketMatches = matches.filter(m => m.bracketPosition !== null);
 
     const tournament = {
       ...rest,
@@ -549,6 +566,12 @@ export const getTournamentBySlug = async (req, res) => {
       includeThirdPlace: config.includeThirdPlace,
       seedingMethod: config.seedingMethod,
       registeredTeamsCount: _count?.teams ?? 0,
+      matchesCount: _count?.matches ?? matches.length,
+      hasFixtures: (_count?.matches ?? 0) > 0 || matches.length > 0,
+      hasGroupFixtures: groupMatches.length > 0,
+      hasBracketFixtures: bracketMatches.length > 0,
+      groupMatchesCount: groupMatches.length,
+      bracketMatchesCount: bracketMatches.length,
       // Only expose code to organizer or admin
       ...(isOrganizer || isAdmin ? { tournamentCode } : {})
     };

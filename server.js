@@ -15,7 +15,6 @@ import matchEventRoutes from './src/routes/matchEventRoutes.js';
 import standingsRoutes from './src/routes/standingsRoutes.js';
 import knockoutRoutes from './src/routes/knockoutRoutes.js';
 import leagueRoutes from './src/routes/leagueRoutes.js';
-import notificationRoutes from './src/routes/notificationRoutes.js';
 import teamJoinRequestRoutes from './src/routes/teamJoinRequestRoutes.js';
 import tournamentJoinRequestRoutes from './src/routes/tournamentJoinRequestRoutes.js';
 import prisma from './src/lib/prisma.js';
@@ -60,6 +59,16 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Server Performance Timing Middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`[SERVER PERF] ${req.method} ${req.originalUrl || req.url} | ${duration}ms`);
+  });
+  next();
+});
+
 // Setup API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
@@ -72,7 +81,6 @@ app.use('/api/match-events', matchEventRoutes);
 app.use('/api/tournaments', standingsRoutes);
 app.use('/api/tournaments', knockoutRoutes);
 app.use('/api/tournaments', leagueRoutes);
-app.use('/api/notifications', notificationRoutes);
 app.use('/api/team-join-requests', teamJoinRequestRoutes);
 app.use('/api/tournament-join-requests', tournamentJoinRequestRoutes);
 
@@ -99,6 +107,10 @@ app.get('/api/roles', (req, res) => {
       { id: 'admin', name: 'Platform Admin', description: 'Full system management, user role control & verification' }
     ]
   });
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 FootVerse Backend running on port ${PORT}`);
 });
 
 export default app;

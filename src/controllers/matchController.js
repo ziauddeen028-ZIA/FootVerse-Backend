@@ -1,7 +1,6 @@
 import crypto from 'crypto';
 import prisma from '../lib/prisma.js';
 import { advanceKnockoutWinner } from './knockoutController.js';
-import { createNotification } from './notificationController.js';
 
 // ─── Helper: Generate 8-char unique alphanumeric Match Code ──────────────────
 function generateMatchCode() {
@@ -440,16 +439,6 @@ export const joinQuickMatchByCode = async (req, res) => {
       }
     });
 
-    if (match.homeTeam?.managerId) {
-      await createNotification({
-        userId: match.homeTeam.managerId,
-        title: 'Opponent Connected!',
-        message: `"${team.name}" has joined your Quick Match. You can now start the match!`,
-        type: 'success',
-        link: `/matches/${match.id}`
-      });
-    }
-
     res.status(200).json({
       message: `Team "${team.name}" joined the Quick Match!`,
       match: {
@@ -680,44 +669,6 @@ export const updateMatchStatus = async (req, res) => {
         } catch (err) {
           console.error('Error checking league completion:', err);
         }
-      }
-    }
-
-    // ── Notify team members about match result ──────────────────────────────
-    if (updatedMatch.status === 'fulltime' || updatedMatch.status === 'completed') {
-      try {
-        const homeScore = updatedMatch.homeScore ?? 0;
-        const awayScore = updatedMatch.awayScore ?? 0;
-        const homeTeamName = updatedMatch.homeTeam?.name || 'Home Team';
-        const awayTeamName = updatedMatch.awayTeam?.name || 'Away Team';
-        const resultMsg = `${homeTeamName} ${homeScore} – ${awayScore} ${awayTeamName}`;
-
-        const [homeMembers, awayMembers] = await Promise.all([
-          updatedMatch.homeTeamId
-            ? prisma.teamMember.findMany({ where: { teamId: updatedMatch.homeTeamId }, select: { playerId: true } })
-            : Promise.resolve([]),
-          updatedMatch.awayTeamId
-            ? prisma.teamMember.findMany({ where: { teamId: updatedMatch.awayTeamId }, select: { playerId: true } })
-            : Promise.resolve([])
-        ]);
-
-        const allPlayerIds = [...new Set(
-          [...homeMembers, ...awayMembers]
-            .map(m => m.playerId)
-            .filter(Boolean)
-        )];
-
-        await Promise.all(allPlayerIds.map(playerId =>
-          createNotification({
-            userId: playerId,
-            title: 'Match Result',
-            message: `Full time! ${resultMsg}`,
-            type: 'info',
-            link: `/matches/${updatedMatch.id}`
-          })
-        ));
-      } catch (notifErr) {
-        console.warn('[Notification] Failed to send match result notifications:', notifErr.message);
       }
     }
 

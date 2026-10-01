@@ -1,5 +1,4 @@
 import prisma from '../lib/prisma.js';
-import { createNotification } from './notificationController.js';
 
 // ─── POST /api/team-join-requests ───────────────────────────────────────────
 // Create a new join request for a player
@@ -58,19 +57,6 @@ export const createJoinRequest = async (req, res) => {
           status: 'pending'
         },
         include: { team: true, player: true }
-      });
-    }
-
-    // Notify the team manager if manager exists and is not the requesting player
-    if (team.managerId && team.managerId !== playerId) {
-      const playerProfile = await prisma.profile.findUnique({ where: { id: playerId } });
-      const playerName = playerProfile?.fullName || 'A player';
-      await createNotification({
-        userId: team.managerId,
-        title: 'New Team Join Request',
-        message: `${playerName} requested to join ${team.name}.`,
-        type: 'info',
-        link: `/teams/${teamId}`
       });
     }
 
@@ -281,17 +267,6 @@ export const approveJoinRequest = async (req, res) => {
       });
     }
 
-    // Notify player that request was approved
-    if (request.playerId) {
-      await createNotification({
-        userId: request.playerId,
-        title: 'Team Request Approved',
-        message: `Your request to join ${request.team?.name || 'the team'} has been approved!`,
-        type: 'success',
-        link: `/teams/${request.teamId}`
-      });
-    }
-
     res.status(200).json({
       message: 'Team Request Approved',
       joinRequest: updatedRequest
@@ -329,17 +304,6 @@ export const rejectJoinRequest = async (req, res) => {
       data: { status: 'rejected', updatedAt: new Date() },
       include: { team: true, player: true }
     });
-
-    // Notify player that request was rejected
-    if (request.playerId) {
-      await createNotification({
-        userId: request.playerId,
-        title: 'Team Request Rejected',
-        message: `Your request to join ${request.team?.name || 'the team'} was rejected.`,
-        type: 'warning',
-        link: `/teams/${request.teamId}`
-      });
-    }
 
     res.status(200).json({
       message: 'Team Request Rejected',
@@ -425,27 +389,6 @@ export const joinByCode = async (req, res) => {
         position: playerProfile?.preferredPosition || 'Midfielder',
         isCaptain: false
       }
-    });
-
-    // Notify team manager/captain
-    if (team.managerId && team.managerId !== playerId) {
-      const playerName = playerProfile?.fullName || 'A player';
-      await createNotification({
-        userId: team.managerId,
-        title: 'New Player Joined via Team Code',
-        message: `${playerName} joined ${team.name} using the team code.`,
-        type: 'success',
-        link: `/teams/${team.id}`
-      });
-    }
-
-    // Also notify the player
-    await createNotification({
-      userId: playerId,
-      title: 'You Joined a Team!',
-      message: `You have successfully joined "${team.name}"${team.tournament?.name ? ` for "${team.tournament.name}"` : ''}.`,
-      type: 'success',
-      link: `/teams/${team.id}`
     });
 
     res.status(201).json({
