@@ -1,9 +1,10 @@
 import prisma from '../lib/prisma.js';
 import { calculateGroupStandings } from './standingsController.js';
+import { parseTournamentConfig } from './tournamentController.js';
 
 /**
  * Helper to generate round specifications for a given team count.
- * @param {number} teamCount - Supported team count (4, 8, 16, 32, 64)
+ * @param {number} teamCount - Supported team count (2, 4, 8, 16, 32, 64)
  * @returns {Array<{ matchCount: number, roundName: string }>}
  */
 const getRoundSpecs = (teamCount) => {
@@ -40,6 +41,10 @@ const getRoundSpecs = (teamCount) => {
 const pairQualifiedTeams = (groups, qualifyingTeamsPerGroup) => {
   const G = groups.length;
   const Q = qualifyingTeamsPerGroup;
+
+  if (G === 2 && Q === 1) {
+    return [groups[0].standings[0].team, groups[1].standings[0].team];
+  }
 
   if (G % 2 === 0 && Q === 2) {
     const topHalf = [];
@@ -302,12 +307,14 @@ export const generateHybridKnockoutBracket = async (req, res) => {
     // 1. Verify tournament exists
     const tournament = await prisma.tournament.findUnique({
       where: { id: tournamentId },
-      select: { id: true, name: true, format: true, startDate: true, organizerId: true }
+      select: { id: true, name: true, format: true, startDate: true, organizerId: true, description: true }
     });
 
     if (!tournament) {
       return res.status(404).json({ error: 'Tournament not found.' });
     }
+
+    const config = parseTournamentConfig(tournament.description);
 
     // 2. Validate format supports group-then-knockout progression
     const groupKnockoutFormats = ['hybrid', 'group_stage', 'group_knockout'];
@@ -385,7 +392,7 @@ export const generateHybridKnockoutBracket = async (req, res) => {
     // 5. Configurable number of qualifying teams per group
     const qualifyingTeamsPerGroup = req.body.qualifyingTeamsPerGroup !== undefined
       ? Number(req.body.qualifyingTeamsPerGroup)
-      : (req.body.qualifyingCount !== undefined ? Number(req.body.qualifyingCount) : 2);
+      : (req.body.qualifyingCount !== undefined ? Number(req.body.qualifyingCount) : (config.qualifyingTeamsPerGroup || 2));
 
     if (!Number.isInteger(qualifyingTeamsPerGroup) || qualifyingTeamsPerGroup < 1) {
       return res.status(400).json({ error: 'qualifyingTeamsPerGroup must be a positive integer.' });
@@ -406,7 +413,7 @@ export const generateHybridKnockoutBracket = async (req, res) => {
       }
     });
 
-    const groups = calculateGroupStandings(teams, completedMatches);
+    const groups = calculateGroupStandings(teams, completedMatches, config);
 
     if (groups.length === 0) {
       return res.status(400).json({ error: 'No groups found for this tournament.' });
@@ -422,11 +429,11 @@ export const generateHybridKnockoutBracket = async (req, res) => {
     }
 
     const totalQualifiedCount = groups.length * qualifyingTeamsPerGroup;
-    const supportedCounts = [4, 8, 16, 32, 64];
+    const supportedCounts = [2, 4, 8, 16, 32, 64, 128];
 
     if (!supportedCounts.includes(totalQualifiedCount)) {
       return res.status(400).json({
-        error: `Knockout bracket generation requires 4, 8, 16, 32, or 64 qualifying teams. Current qualifying team count is ${totalQualifiedCount}.`
+        error: `Knockout bracket generation requires 2, 4, 8, 16, 32, 64, or 128 qualifying teams. Current qualifying team count is ${totalQualifiedCount} (${groups.length} groups × ${qualifyingTeamsPerGroup} qualifiers/group).`
       });
     }
 

@@ -21,10 +21,16 @@ async function uniqueTournamentCode() {
 }
 
 // ─── Helper to parse embedded tournament config ──
-function parseTournamentConfig(description) {
+export function parseTournamentConfig(description) {
   let fieldSize = 11;
   let substitutionMode = 'normal';
   let cleanDescription = description || '';
+  let numberOfGroups = 4;
+  let teamsPerGroup = 4;
+  let qualifyingTeamsPerGroup = 2;
+  let eliminationType = 'single';
+  let includeThirdPlace = true;
+  let seedingMethod = 'seeded';
 
   if (description) {
     const match = description.match(/<!--config:(.*?)-->/);
@@ -33,6 +39,12 @@ function parseTournamentConfig(description) {
         const parsed = JSON.parse(match[1]);
         if (parsed.fieldSize) fieldSize = Number(parsed.fieldSize);
         if (parsed.substitutionMode) substitutionMode = parsed.substitutionMode;
+        if (parsed.numberOfGroups) numberOfGroups = Number(parsed.numberOfGroups);
+        if (parsed.teamsPerGroup) teamsPerGroup = Number(parsed.teamsPerGroup);
+        if (parsed.qualifyingTeamsPerGroup) qualifyingTeamsPerGroup = Number(parsed.qualifyingTeamsPerGroup);
+        if (parsed.eliminationType) eliminationType = parsed.eliminationType;
+        if (parsed.includeThirdPlace !== undefined) includeThirdPlace = parsed.includeThirdPlace;
+        if (parsed.seedingMethod) seedingMethod = parsed.seedingMethod;
         cleanDescription = description.replace(/<!--config:.*?-->/g, '').trim();
       } catch (e) {
         // ignore
@@ -43,15 +55,29 @@ function parseTournamentConfig(description) {
   return {
     fieldSize: (!isNaN(fieldSize) && fieldSize > 0) ? fieldSize : 11,
     substitutionMode: substitutionMode === 'rolling' ? 'rolling' : 'normal',
+    numberOfGroups: (!isNaN(numberOfGroups) && numberOfGroups > 0) ? numberOfGroups : 4,
+    teamsPerGroup: (!isNaN(teamsPerGroup) && teamsPerGroup > 0) ? teamsPerGroup : 4,
+    qualifyingTeamsPerGroup: (!isNaN(qualifyingTeamsPerGroup) && qualifyingTeamsPerGroup > 0) ? qualifyingTeamsPerGroup : 2,
+    eliminationType,
+    includeThirdPlace,
+    seedingMethod,
     cleanDescription
   };
 }
 
-function buildTournamentDescription(description, fieldSize, substitutionMode) {
+export function buildTournamentDescription(description, configOptions = {}) {
   const cleanDesc = (description || '').replace(/<!--config:.*?-->/g, '').trim();
+  const fieldSize = configOptions.fieldSize !== undefined ? Number(configOptions.fieldSize) : 11;
+  const substitutionMode = configOptions.substitutionMode === 'rolling' ? 'rolling' : 'normal';
   const config = {
-    fieldSize: (!isNaN(Number(fieldSize)) && Number(fieldSize) > 0) ? Number(fieldSize) : 11,
-    substitutionMode: substitutionMode === 'rolling' ? 'rolling' : 'normal'
+    fieldSize: (!isNaN(fieldSize) && fieldSize > 0) ? fieldSize : 11,
+    substitutionMode,
+    numberOfGroups: Number(configOptions.numberOfGroups) || 4,
+    teamsPerGroup: Number(configOptions.teamsPerGroup) || 4,
+    qualifyingTeamsPerGroup: Number(configOptions.qualifyingTeamsPerGroup) || 2,
+    eliminationType: configOptions.eliminationType || 'single',
+    includeThirdPlace: configOptions.includeThirdPlace !== undefined ? Boolean(configOptions.includeThirdPlace) : true,
+    seedingMethod: configOptions.seedingMethod || 'seeded',
   };
   return `${cleanDesc} <!--config:${JSON.stringify(config)}-->`.trim();
 }
@@ -85,8 +111,17 @@ export const createTournament = async (req, res) => {
       return res.status(400).json({ error: 'entryFee must be a valid non-negative number.' });
     }
 
-    // Embed fieldSize and substitutionMode into description
-    const finalDescription = buildTournamentDescription(description, fieldSize, substitutionMode);
+    // Embed fieldSize, substitutionMode and group stage / knockout config into description
+    const finalDescription = buildTournamentDescription(description, {
+      fieldSize,
+      substitutionMode,
+      numberOfGroups: req.body.numberOfGroups,
+      teamsPerGroup: req.body.teamsPerGroup,
+      qualifyingTeamsPerGroup: req.body.qualifyingTeamsPerGroup,
+      eliminationType: req.body.eliminationType,
+      includeThirdPlace: req.body.includeThirdPlace,
+      seedingMethod: req.body.seedingMethod,
+    });
 
     // Generate a unique tournament code for the organizer to share
     const tournamentCode = await uniqueTournamentCode();
@@ -113,6 +148,12 @@ export const createTournament = async (req, res) => {
       ...newTournament,
       fieldSize: config.fieldSize,
       substitutionMode: config.substitutionMode,
+      numberOfGroups: config.numberOfGroups,
+      teamsPerGroup: config.teamsPerGroup,
+      qualifyingTeamsPerGroup: config.qualifyingTeamsPerGroup,
+      eliminationType: config.eliminationType,
+      includeThirdPlace: config.includeThirdPlace,
+      seedingMethod: config.seedingMethod,
     };
 
     // Notify the organizer that their tournament was created
@@ -179,6 +220,12 @@ export const getAllTournaments = async (req, res) => {
         ...rest,
         fieldSize: config.fieldSize,
         substitutionMode: config.substitutionMode,
+        numberOfGroups: config.numberOfGroups,
+        teamsPerGroup: config.teamsPerGroup,
+        qualifyingTeamsPerGroup: config.qualifyingTeamsPerGroup,
+        eliminationType: config.eliminationType,
+        includeThirdPlace: config.includeThirdPlace,
+        seedingMethod: config.seedingMethod,
         registeredTeamsCount: _count?.teams ?? 0,
         // Only expose the code to the organizer of this tournament or an admin
         ...(isOrganizer || isAdmin ? { tournamentCode } : {})
@@ -495,6 +542,12 @@ export const getTournamentBySlug = async (req, res) => {
       ...rest,
       fieldSize: config.fieldSize,
       substitutionMode: config.substitutionMode,
+      numberOfGroups: config.numberOfGroups,
+      teamsPerGroup: config.teamsPerGroup,
+      qualifyingTeamsPerGroup: config.qualifyingTeamsPerGroup,
+      eliminationType: config.eliminationType,
+      includeThirdPlace: config.includeThirdPlace,
+      seedingMethod: config.seedingMethod,
       registeredTeamsCount: _count?.teams ?? 0,
       // Only expose code to organizer or admin
       ...(isOrganizer || isAdmin ? { tournamentCode } : {})
@@ -535,12 +588,31 @@ export const updateTournament = async (req, res) => {
     }
 
     let finalDescription = updateData.description;
-    if (updateData.fieldSize !== undefined || updateData.substitutionMode !== undefined || updateData.description !== undefined) {
+    if (
+      updateData.fieldSize !== undefined ||
+      updateData.substitutionMode !== undefined ||
+      updateData.numberOfGroups !== undefined ||
+      updateData.teamsPerGroup !== undefined ||
+      updateData.qualifyingTeamsPerGroup !== undefined ||
+      updateData.eliminationType !== undefined ||
+      updateData.includeThirdPlace !== undefined ||
+      updateData.seedingMethod !== undefined ||
+      updateData.description !== undefined
+    ) {
       const existingConfig = parseTournamentConfig(tournament.description);
-      const targetFieldSize = updateData.fieldSize !== undefined ? updateData.fieldSize : existingConfig.fieldSize;
-      const targetSubMode = updateData.substitutionMode !== undefined ? updateData.substitutionMode : existingConfig.substitutionMode;
-      const targetDesc = updateData.description !== undefined ? updateData.description : existingConfig.cleanDescription;
-      finalDescription = buildTournamentDescription(targetDesc, targetFieldSize, targetSubMode);
+      finalDescription = buildTournamentDescription(
+        updateData.description !== undefined ? updateData.description : existingConfig.cleanDescription,
+        {
+          fieldSize: updateData.fieldSize !== undefined ? updateData.fieldSize : existingConfig.fieldSize,
+          substitutionMode: updateData.substitutionMode !== undefined ? updateData.substitutionMode : existingConfig.substitutionMode,
+          numberOfGroups: updateData.numberOfGroups !== undefined ? updateData.numberOfGroups : existingConfig.numberOfGroups,
+          teamsPerGroup: updateData.teamsPerGroup !== undefined ? updateData.teamsPerGroup : existingConfig.teamsPerGroup,
+          qualifyingTeamsPerGroup: updateData.qualifyingTeamsPerGroup !== undefined ? updateData.qualifyingTeamsPerGroup : existingConfig.qualifyingTeamsPerGroup,
+          eliminationType: updateData.eliminationType !== undefined ? updateData.eliminationType : existingConfig.eliminationType,
+          includeThirdPlace: updateData.includeThirdPlace !== undefined ? updateData.includeThirdPlace : existingConfig.includeThirdPlace,
+          seedingMethod: updateData.seedingMethod !== undefined ? updateData.seedingMethod : existingConfig.seedingMethod,
+        }
+      );
     }
 
     const updatedTournament = await prisma.tournament.update({
@@ -567,6 +639,12 @@ export const updateTournament = async (req, res) => {
       ...updatedTournament,
       fieldSize: config.fieldSize,
       substitutionMode: config.substitutionMode,
+      numberOfGroups: config.numberOfGroups,
+      teamsPerGroup: config.teamsPerGroup,
+      qualifyingTeamsPerGroup: config.qualifyingTeamsPerGroup,
+      eliminationType: config.eliminationType,
+      includeThirdPlace: config.includeThirdPlace,
+      seedingMethod: config.seedingMethod,
     };
 
     res.status(200).json({ message: 'Tournament updated!', tournament: tournamentResponse });

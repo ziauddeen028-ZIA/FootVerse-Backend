@@ -65,7 +65,7 @@ const generateRoundRobinSchedule = (teams) => {
 
 /**
  * POST /api/tournaments/:tournamentId/league/generate
- * Generates all round-robin league fixtures for a tournament.
+ * Generates all round-robin league fixtures for a pure league tournament.
  */
 export const generateLeagueFixtures = async (req, res) => {
   try {
@@ -75,7 +75,7 @@ export const generateLeagueFixtures = async (req, res) => {
     // 1. Verify tournament exists
     const tournament = await prisma.tournament.findUnique({
       where: { id: tournamentId },
-      select: { id: true, name: true, format: true, startDate: true, organizerId: true }
+      select: { id: true, name: true, format: true, startDate: true, organizerId: true, status: true }
     });
 
     if (!tournament) {
@@ -83,7 +83,8 @@ export const generateLeagueFixtures = async (req, res) => {
     }
 
     // 2. Validate format is league
-    if (tournament.format !== 'league') {
+    const isLeague = tournament.format === 'league' || tournament.format === 'round_robin';
+    if (!isLeague) {
       return res.status(400).json({ error: 'Tournament format must be "league" to generate league fixtures.' });
     }
 
@@ -110,29 +111,27 @@ export const generateLeagueFixtures = async (req, res) => {
       });
     }
 
-    // 5. Check if league fixtures already exist (non-bracket matches for this tournament)
-    const existingLeagueMatch = await prisma.match.findFirst({
+    // 5. Check if non-bracket fixtures already exist for this tournament
+    const existingMatch = await prisma.match.findFirst({
       where: {
         tournamentId,
-        bracketPosition: null,
-        roundName: { startsWith: 'Matchday' }
+        bracketPosition: null
       }
     });
 
-    if (existingLeagueMatch) {
+    if (existingMatch) {
       return res.status(400).json({
         error: 'League fixtures have already been generated for this tournament.'
       });
     }
 
-    // 6. Generate round-robin schedule
-    const schedule = generateRoundRobinSchedule(teams);
-
     const baseDate = tournament.startDate && !isNaN(new Date(tournament.startDate).getTime())
       ? new Date(tournament.startDate)
       : new Date();
 
-    // 7. Create all matches in a single transaction
+    // 6. Generate single-division round-robin schedule
+    const schedule = generateRoundRobinSchedule(teams);
+
     const createdMatches = await prisma.$transaction(async (tx) => {
       const allMatches = [];
 
@@ -155,7 +154,6 @@ export const generateLeagueFixtures = async (req, res) => {
               roundName,
               matchDate,
               status: 'scheduled'
-              // No bracketPosition — this is a league match
             },
             include: {
               homeTeam: {
@@ -171,16 +169,18 @@ export const generateLeagueFixtures = async (req, res) => {
         }
       }
 
-      // Update tournament status to ongoing
-      await tx.tournament.update({
-        where: { id: tournamentId },
-        data: { status: 'ongoing' }
-      });
+      // Update tournament status to ongoing if draft/registration_open
+      if (tournament.status === 'draft' || tournament.status === 'registration_open') {
+        await tx.tournament.update({
+          where: { id: tournamentId },
+          data: { status: 'ongoing' }
+        });
+      }
 
       return allMatches;
     });
 
-    // 8. Group generated matches by matchday
+    // Group generated matches by matchday
     const fixtures = {};
     for (const match of createdMatches) {
       const day = match.roundName;
@@ -201,6 +201,186 @@ export const generateLeagueFixtures = async (req, res) => {
 
   } catch (err) {
     console.error('Error generating league fixtures:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+/**
+ * POST /api/tournaments/:tournamentId/group-stage/generate
+ * Generates round-robin fixtures strictly within each group for group_stage / group_knockout tournaments.
+ */
+export const generateGroupStageFixtures = async (req, res) => {
+  try {
+    const { tournamentId } = req.params;
+    const userId = req.user.id;
+
+    // 1. Verify tournament exists
+    const tournament = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      select: { id: true, name: true, format: true, startDate: true, organizerId: true, status: true }
+    });
+
+    if (!tournament) {
+      return res.status(404).json({ error: 'Tournament not found.' });
+    }
+
+    // 2. Validate format is group stage / group knockout
+    const isGroupStage = tournament.format === 'group_stage' || 
+                         tournament.format === 'group_knockout' || 
+                         tournament.format === 'hybrid';
+
+    if (!isGroupStage) {
+      return res.status(400).json({
+        error: `Tournament format must be "group_stage" or "group_knockout" to generate group fixtures. Got: "${tournament.format}".`
+      });
+    }
+
+    // 3. Verify authorization
+    const user = await prisma.profile.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true }
+    });
+
+    if (!user || (tournament.organizerId !== userId && user.role !== 'admin')) {
+      return res.status(403).json({ error: 'Only the tournament organizer or an admin can generate group fixtures.' });
+    }
+
+    // 4. Fetch registered teams
+    const teams = await prisma.team.findMany({
+      where: { tournamentId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, name: true, shortName: true, logoUrl: true, groupName: true }
+    });
+
+    if (!teams || teams.length < 2) {
+      return res.status(400).json({
+        error: `At least 2 teams are required to generate group fixtures. Current team count: ${teams?.length || 0}.`
+      });
+    }
+
+    // 5. Check if non-bracket fixtures already exist for this tournament
+    const existingMatch = await prisma.match.findFirst({
+      where: {
+        tournamentId,
+        bracketPosition: null
+      }
+    });
+
+    if (existingMatch) {
+      return res.status(400).json({
+        error: 'Group stage fixtures have already been generated for this tournament.'
+      });
+    }
+
+    // 6. Validate all registered teams have a groupName
+    const missingGroup = teams.some(t => !t.groupName || t.groupName.trim() === '');
+    if (missingGroup) {
+      return res.status(400).json({
+        error: 'All registered teams must be assigned to a group (groupName) before generating group stage fixtures.'
+      });
+    }
+
+    // 7. Group teams by groupName
+    const groupsMap = {};
+    teams.forEach(t => {
+      const g = t.groupName.trim();
+      if (!groupsMap[g]) groupsMap[g] = [];
+      groupsMap[g].push(t);
+    });
+
+    // Ensure each group has at least 2 teams
+    for (const [gName, gTeams] of Object.entries(groupsMap)) {
+      if (gTeams.length < 2) {
+        return res.status(400).json({
+          error: `${gName} has only ${gTeams.length} team(s). Each group must have at least 2 teams to generate fixtures.`
+        });
+      }
+    }
+
+    const sortedGroupNames = Object.keys(groupsMap).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    const baseDate = tournament.startDate && !isNaN(new Date(tournament.startDate).getTime())
+      ? new Date(tournament.startDate)
+      : new Date();
+
+    // 8. Create all group matches in a single transaction (fixtures only between teams in the SAME group)
+    const createdMatches = await prisma.$transaction(async (tx) => {
+      const allMatches = [];
+
+      for (let gIdx = 0; gIdx < sortedGroupNames.length; gIdx++) {
+        const gName = sortedGroupNames[gIdx];
+        const groupTeams = groupsMap[gName];
+        const groupSchedule = generateRoundRobinSchedule(groupTeams);
+
+        for (let dayIndex = 0; dayIndex < groupSchedule.length; dayIndex++) {
+          const matchday = groupSchedule[dayIndex];
+          const roundName = `${gName} - Matchday ${dayIndex + 1}`;
+          // Space matchdays
+          const matchdayDate = new Date(baseDate.getTime() + dayIndex * 7 * 24 * 60 * 60 * 1000);
+
+          for (let mIndex = 0; mIndex < matchday.length; mIndex++) {
+            const { home, away } = matchday[mIndex];
+            // Offset match times within day
+            const matchDate = new Date(matchdayDate.getTime() + (gIdx * 2 + mIndex) * 2 * 60 * 60 * 1000);
+
+            const match = await tx.match.create({
+              data: {
+                tournamentId,
+                homeTeamId: home.id,
+                awayTeamId: away.id,
+                roundName,
+                matchDate,
+                status: 'scheduled'
+              },
+              include: {
+                homeTeam: {
+                  select: { id: true, name: true, shortName: true, logoUrl: true, groupName: true }
+                },
+                awayTeam: {
+                  select: { id: true, name: true, shortName: true, logoUrl: true, groupName: true }
+                }
+              }
+            });
+
+            allMatches.push(match);
+          }
+        }
+      }
+
+      // Update tournament status to ongoing if draft/registration_open
+      if (tournament.status === 'draft' || tournament.status === 'registration_open') {
+        await tx.tournament.update({
+          where: { id: tournamentId },
+          data: { status: 'ongoing' }
+        });
+      }
+
+      return allMatches;
+    });
+
+    // Group generated matches by group & matchday
+    const fixtures = {};
+    for (const match of createdMatches) {
+      const day = match.roundName;
+      if (!fixtures[day]) fixtures[day] = [];
+      fixtures[day].push(match);
+    }
+
+    return res.status(201).json({
+      message: 'Group stage fixtures generated successfully.',
+      tournament: {
+        id: tournament.id,
+        name: tournament.name
+      },
+      totalGroups: sortedGroupNames.length,
+      totalMatches: createdMatches.length,
+      fixtures
+    });
+
+  } catch (err) {
+    console.error('Error generating group stage fixtures:', err);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 };

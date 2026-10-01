@@ -1,12 +1,14 @@
 import prisma from '../lib/prisma.js';
+import { parseTournamentConfig } from './tournamentController.js';
 
 /**
  * Calculates group standings given teams and completed matches.
  * @param {Array} teams - List of team objects with id, name, shortName, logoUrl, groupName
  * @param {Array} matches - List of completed match objects with homeTeamId, awayTeamId, homeScore, awayScore
+ * @param {Object} [tournamentConfig] - Optional tournament config with numberOfGroups
  * @returns {Array} List of group standings objects [{ name: groupName, standings: [...] }, ...]
  */
-export const calculateGroupStandings = (teams, matches) => {
+export const calculateGroupStandings = (teams, matches = [], tournamentConfig = null) => {
   const standingsMap = {};
 
   for (const team of teams) {
@@ -36,7 +38,7 @@ export const calculateGroupStandings = (teams, matches) => {
     const homeScore = match.homeScore ?? 0;
     const awayScore = match.awayScore ?? 0;
 
-    // Process home team (only if it belongs to this tournament)
+    // Process home team
     if (standingsMap[homeId]) {
       standingsMap[homeId].played += 1;
       standingsMap[homeId].goalsFor += homeScore;
@@ -53,7 +55,7 @@ export const calculateGroupStandings = (teams, matches) => {
       }
     }
 
-    // Process away team (only if it belongs to this tournament)
+    // Process away team
     if (standingsMap[awayId]) {
       standingsMap[awayId].played += 1;
       standingsMap[awayId].goalsFor += awayScore;
@@ -95,6 +97,17 @@ export const calculateGroupStandings = (teams, matches) => {
   // Group teams by groupName
   const groupsMap = {};
 
+  // Pre-seed groups based on tournamentConfig numberOfGroups if provided
+  const numGroups = Number(tournamentConfig?.numberOfGroups);
+  if (numGroups && numGroups > 0) {
+    for (let i = 0; i < numGroups; i++) {
+      const gName = i < 26
+        ? `Group ${String.fromCharCode(65 + i)}`
+        : `Group ${String.fromCharCode(65 + Math.floor(i / 26) - 1)}${String.fromCharCode(65 + (i % 26))}`;
+      groupsMap[gName] = [];
+    }
+  }
+
   for (const entry of Object.values(standingsMap)) {
     const groupName = entry.team.groupName && entry.team.groupName.trim() !== ''
       ? entry.team.groupName.trim()
@@ -132,12 +145,14 @@ export const getTournamentStandings = async (req, res) => {
     // Verify tournament exists
     const tournament = await prisma.tournament.findUnique({
       where: { id: tournamentId },
-      select: { id: true, name: true }
+      select: { id: true, name: true, format: true, description: true }
     });
 
     if (!tournament) {
       return res.status(404).json({ error: 'Tournament not found.' });
     }
+
+    const config = parseTournamentConfig(tournament.description);
 
     // Fetch all teams registered in this tournament
     const teams = await prisma.team.findMany({
@@ -166,13 +181,21 @@ export const getTournamentStandings = async (req, res) => {
       }
     });
 
-    // Check if any team has a groupName assigned
+    // Check if tournament is group stage or any team has a groupName assigned
     const hasGroups = teams.some(t => t.groupName && t.groupName.trim() !== '');
+    const isGroupFormat = tournament.format === 'group_stage' || tournament.format === 'group_knockout' || tournament.format === 'hybrid';
 
-    if (hasGroups) {
-      const groups = calculateGroupStandings(teams, matches);
+    if (hasGroups || isGroupFormat) {
+      const groups = calculateGroupStandings(teams, matches, config);
       return res.status(200).json({
-        tournament: { id: tournament.id, name: tournament.name },
+        tournament: {
+          id: tournament.id,
+          name: tournament.name,
+          format: tournament.format,
+          qualifyingTeamsPerGroup: config.qualifyingTeamsPerGroup,
+          numberOfGroups: config.numberOfGroups,
+          teamsPerGroup: config.teamsPerGroup
+        },
         groups
       });
     }
