@@ -129,56 +129,70 @@ export const generateLeagueFixtures = async (req, res) => {
       ? new Date(tournament.startDate)
       : new Date();
 
-    // 6. Generate single-division round-robin schedule
+    // 6. Generate single-division round-robin schedule in memory
     const schedule = generateRoundRobinSchedule(teams);
+    const matchRecords = [];
 
-    const createdMatches = await prisma.$transaction(async (tx) => {
-      const allMatches = [];
+    for (let dayIndex = 0; dayIndex < schedule.length; dayIndex++) {
+      const matchday = schedule[dayIndex];
+      const roundName = `Matchday ${dayIndex + 1}`;
+      // Each matchday is spaced 7 days apart
+      const matchdayDate = new Date(baseDate.getTime() + dayIndex * 7 * 24 * 60 * 60 * 1000);
 
-      for (let dayIndex = 0; dayIndex < schedule.length; dayIndex++) {
-        const matchday = schedule[dayIndex];
-        const roundName = `Matchday ${dayIndex + 1}`;
-        // Each matchday is spaced 7 days apart
-        const matchdayDate = new Date(baseDate.getTime() + dayIndex * 7 * 24 * 60 * 60 * 1000);
+      for (let mIndex = 0; mIndex < matchday.length; mIndex++) {
+        const { home, away } = matchday[mIndex];
+        // Stagger match times within a matchday (2 hours apart)
+        const matchDate = new Date(matchdayDate.getTime() + mIndex * 2 * 60 * 60 * 1000);
 
-        for (let mIndex = 0; mIndex < matchday.length; mIndex++) {
-          const { home, away } = matchday[mIndex];
-          // Stagger match times within a matchday (2 hours apart)
-          const matchDate = new Date(matchdayDate.getTime() + mIndex * 2 * 60 * 60 * 1000);
-
-          const match = await tx.match.create({
-            data: {
-              tournamentId,
-              homeTeamId: home.id,
-              awayTeamId: away.id,
-              roundName,
-              matchDate,
-              status: 'scheduled'
-            },
-            include: {
-              homeTeam: {
-                select: { id: true, name: true, shortName: true, logoUrl: true }
-              },
-              awayTeam: {
-                select: { id: true, name: true, shortName: true, logoUrl: true }
-              }
-            }
-          });
-
-          allMatches.push(match);
-        }
-      }
-
-      // Update tournament status to ongoing if draft/registration_open
-      if (tournament.status === 'draft' || tournament.status === 'registration_open') {
-        await tx.tournament.update({
-          where: { id: tournamentId },
-          data: { status: 'ongoing' }
+        matchRecords.push({
+          tournamentId,
+          homeTeamId: home.id,
+          awayTeamId: away.id,
+          roundName,
+          matchDate,
+          status: 'scheduled'
         });
       }
+    }
 
-      return allMatches;
-    });
+    // 7. Execute bulk insert inside an atomic Prisma transaction with fallback timeout
+    const createdMatches = await prisma.$transaction(
+      async (tx) => {
+        // Bulk insert all match records in one fast database query
+        await tx.match.createMany({
+          data: matchRecords
+        });
+
+        // Update tournament status to ongoing if draft/registration_open
+        if (tournament.status === 'draft' || tournament.status === 'registration_open') {
+          await tx.tournament.update({
+            where: { id: tournamentId },
+            data: { status: 'ongoing' }
+          });
+        }
+
+        // Fetch inserted matches with relations in a single fast query
+        return await tx.match.findMany({
+          where: {
+            tournamentId,
+            bracketPosition: null
+          },
+          include: {
+            homeTeam: {
+              select: { id: true, name: true, shortName: true, logoUrl: true }
+            },
+            awayTeam: {
+              select: { id: true, name: true, shortName: true, logoUrl: true }
+            }
+          },
+          orderBy: { matchDate: 'asc' }
+        });
+      },
+      {
+        maxWait: 10000,
+        timeout: 20000
+      }
+    );
 
     // Group generated matches by matchday
     const fixtures = {};
@@ -305,60 +319,74 @@ export const generateGroupStageFixtures = async (req, res) => {
       ? new Date(tournament.startDate)
       : new Date();
 
-    // 8. Create all group matches in a single transaction (fixtures only between teams in the SAME group)
-    const createdMatches = await prisma.$transaction(async (tx) => {
-      const allMatches = [];
+    // 8. Prepare all match records in memory first (no cross-group matches)
+    const matchRecords = [];
+    for (let gIdx = 0; gIdx < sortedGroupNames.length; gIdx++) {
+      const gName = sortedGroupNames[gIdx];
+      const groupTeams = groupsMap[gName];
+      const groupSchedule = generateRoundRobinSchedule(groupTeams);
 
-      for (let gIdx = 0; gIdx < sortedGroupNames.length; gIdx++) {
-        const gName = sortedGroupNames[gIdx];
-        const groupTeams = groupsMap[gName];
-        const groupSchedule = generateRoundRobinSchedule(groupTeams);
+      for (let dayIndex = 0; dayIndex < groupSchedule.length; dayIndex++) {
+        const matchday = groupSchedule[dayIndex];
+        const roundName = `${gName} - Matchday ${dayIndex + 1}`;
+        // Space matchdays
+        const matchdayDate = new Date(baseDate.getTime() + dayIndex * 7 * 24 * 60 * 60 * 1000);
 
-        for (let dayIndex = 0; dayIndex < groupSchedule.length; dayIndex++) {
-          const matchday = groupSchedule[dayIndex];
-          const roundName = `${gName} - Matchday ${dayIndex + 1}`;
-          // Space matchdays
-          const matchdayDate = new Date(baseDate.getTime() + dayIndex * 7 * 24 * 60 * 60 * 1000);
+        for (let mIndex = 0; mIndex < matchday.length; mIndex++) {
+          const { home, away } = matchday[mIndex];
+          // Offset match times within day
+          const matchDate = new Date(matchdayDate.getTime() + (gIdx * 2 + mIndex) * 2 * 60 * 60 * 1000);
 
-          for (let mIndex = 0; mIndex < matchday.length; mIndex++) {
-            const { home, away } = matchday[mIndex];
-            // Offset match times within day
-            const matchDate = new Date(matchdayDate.getTime() + (gIdx * 2 + mIndex) * 2 * 60 * 60 * 1000);
-
-            const match = await tx.match.create({
-              data: {
-                tournamentId,
-                homeTeamId: home.id,
-                awayTeamId: away.id,
-                roundName,
-                matchDate,
-                status: 'scheduled'
-              },
-              include: {
-                homeTeam: {
-                  select: { id: true, name: true, shortName: true, logoUrl: true, groupName: true }
-                },
-                awayTeam: {
-                  select: { id: true, name: true, shortName: true, logoUrl: true, groupName: true }
-                }
-              }
-            });
-
-            allMatches.push(match);
-          }
+          matchRecords.push({
+            tournamentId,
+            homeTeamId: home.id,
+            awayTeamId: away.id,
+            roundName,
+            matchDate,
+            status: 'scheduled'
+          });
         }
       }
+    }
 
-      // Update tournament status to ongoing if draft/registration_open
-      if (tournament.status === 'draft' || tournament.status === 'registration_open') {
-        await tx.tournament.update({
-          where: { id: tournamentId },
-          data: { status: 'ongoing' }
+    // 9. Execute bulk insert inside an atomic Prisma transaction with safe fallback timeout
+    const createdMatches = await prisma.$transaction(
+      async (tx) => {
+        // Bulk insert all match records in one fast database query
+        await tx.match.createMany({
+          data: matchRecords
         });
-      }
 
-      return allMatches;
-    });
+        // Update tournament status to ongoing if draft/registration_open
+        if (tournament.status === 'draft' || tournament.status === 'registration_open') {
+          await tx.tournament.update({
+            where: { id: tournamentId },
+            data: { status: 'ongoing' }
+          });
+        }
+
+        // Fetch inserted matches with relations in a single fast query
+        return await tx.match.findMany({
+          where: {
+            tournamentId,
+            bracketPosition: null
+          },
+          include: {
+            homeTeam: {
+              select: { id: true, name: true, shortName: true, logoUrl: true, groupName: true }
+            },
+            awayTeam: {
+              select: { id: true, name: true, shortName: true, logoUrl: true, groupName: true }
+            }
+          },
+          orderBy: { matchDate: 'asc' }
+        });
+      },
+      {
+        maxWait: 10000,
+        timeout: 20000
+      }
+    );
 
     // Group generated matches by group & matchday
     const fixtures = {};
